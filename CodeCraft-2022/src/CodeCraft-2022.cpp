@@ -9,7 +9,7 @@
 // using namespace std;
 
 // 提交的时候要注释掉这个宏
-#define DEBUG
+// #define DEBUG
 void handle_csv(std::ifstream& fp,
                 std::unordered_map<std::string, std::vector<std::string>>& output,
                 std::vector<std::string>& columns) {
@@ -537,6 +537,98 @@ void contest_calculate_95_with_maxrecord(
     return;
 }
 
+void contest_calculate_95_with_rank(
+    std::vector<std::string>& client_names, std::vector<std::string>& edges_names,
+    std::vector<std::vector<int>>& data_dm_rowstore, std::vector<std::vector<int>>& qos_map,
+    std::vector<int>& edge_dist_num, std::unordered_map<std::string, int>& sb_map,
+    int qos_constrain, std::vector<std::vector<std::vector<int>>>& res) {
+    res.resize(data_dm_rowstore.size());  // 时间 客户节点序号 edge序号 分配数量
+    std::vector<int> edge_times(edges_names.size(), 0);
+    int five_percent_time = data_dm_rowstore.size() * 0.05 - 1;
+    std::vector<bool> edge_exceed(edges_names.size(), false);
+    std::vector<int> edge_max_record(edges_names.size(), 0);  // edge节点超分配的最大值
+    int base = 100;
+    for (size_t time = 0; time < data_dm_rowstore.size(); time++) {
+        std::vector<int> row = data_dm_rowstore[time];  // 每个时间段客户端需求的带宽
+        res[time].resize(row.size());
+        auto sb_map_cp = sb_map;
+        std::vector<int> edge_used(edges_names.size(), 0);
+        std::vector<int> edge_record_acm(edges_names.size(), 0);  // edge当前轮次累计
+        for (size_t cli_idx = 0; cli_idx < row.size(); cli_idx++) {
+            res[time][cli_idx].resize(edges_names.size(), 0);
+            int cli_dm = row[cli_idx];
+
+            std::vector<std::pair<int, int>> sort_array;
+            for (size_t i = 0; i < qos_map[cli_idx].size(); i++) {
+                sort_array.push_back({edge_dist_num[qos_map[cli_idx][i]], qos_map[cli_idx][i]});
+            }
+            std::sort(sort_array.begin(), sort_array.end(), std::greater<std::pair<int, int>>());
+
+            // 对单个时间内已经分配过的edge进行分配
+            for (int i = sort_array.size() - 1; i >= 0 && cli_dm; i--) {
+                int edge_idx = sort_array[i].second;
+                if (edge_times[edge_idx] >= five_percent_time || edge_used[edge_idx] != 1) continue;
+                edge_used[edge_idx] = 1;
+                int& edge_rest_sb = sb_map_cp[edges_names[edge_idx]];
+                int dist_v = edge_rest_sb;
+                dist_v = std::min(dist_v, cli_dm);
+                cli_dm -= dist_v;
+                edge_rest_sb -= dist_v;
+                res[time][cli_idx][edge_idx] += dist_v;
+            }
+
+            // 对单个时间内未分配过的edge进行分配
+            for (int i = sort_array.size() - 1; i >= 0 && cli_dm; i--) {
+                int edge_idx = sort_array[i].second;
+                if (edge_times[edge_idx] >= five_percent_time) continue;
+                edge_used[edge_idx] = 1;
+                int& edge_rest_sb = sb_map_cp[edges_names[edge_idx]];
+                int dist_v = edge_rest_sb;
+                dist_v = std::min(dist_v, cli_dm);
+                cli_dm -= dist_v;
+                edge_rest_sb -= dist_v;
+                res[time][cli_idx][edge_idx] += dist_v;
+            }
+
+            // 经过以上所有edge节点已经分配超过5%次数
+
+            // 先分配带宽剩余最多的，还是先分配之前单轮次分配带宽最多的？
+            // 单轮次分配带宽最大记录排序
+            std::vector<std::pair<int, int>> max_record_sort;
+            for (size_t i = 0; i < qos_map[cli_idx].size(); i++) {
+                max_record_sort.push_back(
+                    {edge_max_record[qos_map[cli_idx][i]], qos_map[cli_idx][i]});
+            }
+            std::sort(max_record_sort.begin(), max_record_sort.end(),
+                      std::greater<std::pair<int, int>>());
+
+            // 根据评分分配
+            while(cli_dm) {
+                for (size_t i = 0; i < max_record_sort.size() && cli_dm; i++) {
+                    int edge_idx = max_record_sort[i].second;
+                    double score = double(edge_dist_num[edge_idx]) / max_record_sort.size();
+                    int& edge_rest_sb = sb_map_cp[edges_names[edge_idx]];
+                    int dist_v_in = score * base;
+                    dist_v_in = dist_v_in * dist_v_in;
+                    dist_v_in = std::min(dist_v_in, edge_rest_sb);
+                    dist_v_in = std::min(dist_v_in, cli_dm);
+                    cli_dm -= dist_v_in;
+                    edge_rest_sb -= dist_v_in;
+                    res[time][cli_idx][edge_idx] += dist_v_in;
+                    edge_record_acm[edge_idx] += dist_v_in;
+                }
+            }
+            
+            if (cli_dm != 0) std::cout << cli_dm << std::endl;
+        }
+        for (size_t i = 0; i < edge_times.size(); i++) {
+            edge_times[i] += edge_used[i];
+            edge_max_record[i] = std::max(edge_max_record[i], edge_record_acm[i]);
+        }
+    }
+    return;
+}
+
 void handle_output(std::vector<std::vector<std::vector<int>>>& res,
                    std::vector<std::string>& client_names, std::vector<std::string>& edges_names) {
 #ifdef DEBUG
@@ -587,7 +679,7 @@ int main() {
     // std::cout << qos_constrain << std::endl;
 
     std::vector<std::vector<std::vector<int>>> res_for_print;
-    contest_calculate_95_with_maxrecord(client_names, edges_names, data_dm_rowstore, qos_map,
+    contest_calculate_95_with_rank(client_names, edges_names, data_dm_rowstore, qos_map,
                                         edge_dist_num, sb_map, qos_constrain, res_for_print);
 
     handle_output(res_for_print, client_names, edges_names);
