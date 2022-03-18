@@ -9,7 +9,7 @@
 // using namespace std;
 
 // 提交的时候要注释掉这个宏
-// #define DEBUG
+#define DEBUG
 void handle_csv(std::ifstream& fp,
                 std::unordered_map<std::string, std::vector<std::string>>& output,
                 std::vector<std::string>& columns) {
@@ -718,17 +718,17 @@ void contest_calculate_95_with_maxrequire_sort2(
 
             // int dist_v = cli_dm / qos_map[cli_idx].size();
             
-            // std::vector<std::pair<int, int>> max_record_sort;
-            // for (size_t i = 0; i < qos_map[cli_idx].size(); i++) {
-            //     max_record_sort.push_back(
-            //         {edge_max_record[qos_map[cli_idx][i]], qos_map[cli_idx][i]});
-            // }
-            // std::sort(max_record_sort.begin(), max_record_sort.end(),
-            //           std::greater<std::pair<int, int>>());
+            std::vector<std::pair<int, int>> max_record_sort;
+            for (size_t i = 0; i < qos_map[cli_idx].size(); i++) {
+                max_record_sort.push_back(
+                    {edge_max_record[qos_map[cli_idx][i]], qos_map[cli_idx][i]});
+            }
+            std::sort(max_record_sort.begin(), max_record_sort.end(),
+                      std::greater<std::pair<int, int>>());
 
             // 使用已经超分配过的edge进行分配
-            for (size_t i = 0; i < sort_array.size() && cli_dm; i++) {
-                int edge_idx = sort_array[i].second;
+            for (size_t i = 0; i < max_record_sort.size() && cli_dm; i++) {
+                int edge_idx = max_record_sort[i].second;
                 if (!edge_exceed[edge_idx]) continue;
                 int& edge_rest_sb = sb_map_cp[edges_names[edge_idx]];
                 int dist_v = edge_rest_sb;
@@ -907,7 +907,7 @@ int main() {
     // std::cout << qos_constrain << std::endl;
 
     std::vector<std::vector<std::vector<int>>> res_for_print;
-    contest_calculate_95_with_maxrequire_sort1(client_names, edges_names, data_dm_rowstore, qos_map,
+    contest_calculate_95_with_maxrequire_sort2(client_names, edges_names, data_dm_rowstore, qos_map,
                                         edge_dist_num, sb_map, qos_constrain, res_for_print);
     // contest_calculate_95_attack4(client_names, edges_names, data_dm_rowstore, qos_map,
     //                                     edge_dist_num, sb_map, qos_constrain, res_for_print);
