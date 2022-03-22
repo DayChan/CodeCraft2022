@@ -9,7 +9,7 @@
 // using namespace std;
 
 // 提交的时候要注释掉这个宏
-// #define DEBUG
+#define DEBUG
 void handle_csv(std::ifstream& fp,
                 std::unordered_map<std::string, std::vector<std::string>>& output,
                 std::vector<std::string>& columns) {
@@ -1228,6 +1228,14 @@ void contest_calculate_95_with_maxrequire_sort6(
     //     std::sort(sort_require.begin(), sort_require.end(), std::greater<std::pair<int, int>>());
     // }
 
+    // std::sort(sort_time.begin(), sort_time.end(), std::greater<std::pair<int, int>>());
+
+    // std::vector<std::pair<double, int>> sort_edge_avg_dist_highest_value;
+    // for (size_t i = 0; i < edges_names.size(); i++) {
+    //     sort_edge_avg_dist_highest_value.push_back({sb_map[edges_names[i]] / (edge_dist_num[i] + 0.1), i});
+    // }
+    // std::sort(sort_edge_avg_dist_highest_value.begin(), sort_edge_avg_dist_highest_value.end(), std::greater<std::pair<double, int>>());
+    
     std::vector<std::pair<int, int>> sort_edge_dist_num;
     for (size_t i = 0; i < edges_names.size(); i++) {
         sort_edge_dist_num.push_back({edge_dist_num[i], i});
