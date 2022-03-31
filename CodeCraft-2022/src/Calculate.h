@@ -10,6 +10,7 @@ class ContestCalculate {
         sb_map_alltime.resize(io.data_dm_rowstore.size(), io.sb_map);
     }
 
+    // brute_force训练赛分数为1011997
     void brute_force() {
         res.resize(io.data_dm_rowstore.size(),
                    std::vector<std::vector<std::vector<std::string>>>(
