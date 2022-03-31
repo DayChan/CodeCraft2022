@@ -207,7 +207,7 @@ class ContestIO {
         std::vector<std::string> client_names;  // 客户节点名字
         std::vector<std::string> edges_names;   // 边缘节点名字
         std::vector<std::vector<std::vector<std::pair<int, std::string>>>>
-            data_dm_rowstore;  // demand行存，外idx为时间排序，中idx根据客户节点vector排序, 内idx为需求量与流名称的pair
+            data_dm_rowstore;  // demand行存，外idx为时间排序，中idx根据客户节点vector排序, 内idx为需求量与流名称的pair的idx（这个没有顺序）
         std::vector<std::vector<int>>
             qos_map;  // 根据qos_constrain过滤后客户节点可用的edges，vector序号对应着client_names里面的顺序，edges序号对应着edges_names里面的序号
         std::vector<int> edge_dist_num;                   // 每个edge可以分发的节点数
