@@ -1,4 +1,5 @@
 #define DEBUG
+// 提交时记得注释掉这个宏
 #include "ContestIO.h"
 #include "Calculate.h"
 int main() {
