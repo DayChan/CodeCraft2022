@@ -39,7 +39,7 @@ class ContestIO {
             std::istringstream cfg_line_iss2(cfg_line);
             getline(cfg_line_iss2, elem, '=');
             getline(cfg_line_iss2, elem, '=');  // 获取qos_constrain;
-            base_cost = atoi(elem.c_str());
+            base_cost = atoi(elem.c_str()) * 2;
     }
 
     void handle_csv(std::ifstream& fp,
@@ -171,7 +171,7 @@ class ContestIO {
         fp_sb.close();
     }
 
-    void handle_output(std::vector<std::vector<std::vector<std::vector<std::string>>>>& res) {
+    void handle_output(std::vector<std::vector<std::vector<std::vector<std::pair<int, std::string>>>>>& res) {
     #ifdef DEBUG
         std::ofstream fout("./output/solution.txt", std::ios_base::trunc);
     #else
@@ -189,7 +189,7 @@ class ContestIO {
                         fout << "<" << edges_names[edge_idx];
                         for(int i = 0; i < output_time[cli_idx][edge_idx].size(); i++) {
                             fout << ",";
-                            fout << output_time[cli_idx][edge_idx][i];
+                            fout << output_time[cli_idx][edge_idx][i].second;
                         }
                         fout << ">";
                     }
