@@ -4,7 +4,7 @@
 #include "Calculate.h"
 int main() {
     ContestCalculate cal;
-    cal.brute_force2();
+    cal.brute_force4();
     cal.handle_output();
     #ifdef DEBUG
     std::cout << "SCORE: " << cal.calculate_94_score() << std::endl;
