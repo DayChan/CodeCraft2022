@@ -39,7 +39,7 @@ class ContestIO {
             std::istringstream cfg_line_iss2(cfg_line);
             getline(cfg_line_iss2, elem, '=');
             getline(cfg_line_iss2, elem, '=');  // 获取qos_constrain;
-            base_cost = atoi(elem.c_str()) * 2;
+            base_cost = atoi(elem.c_str());
     }
 
     void handle_csv(std::ifstream& fp,
@@ -212,5 +212,5 @@ class ContestIO {
             qos_map;  // 根据qos_constrain过滤后客户节点可用的edges，vector序号对应着client_names里面的顺序，edges序号对应着edges_names里面的序号
         std::vector<int> edge_dist_num;                   // 每个edge可以分发的节点数
         std::vector<std::vector<int>> edge_dist_clients;  // 每个edge可以分发的客户节点
-        std::unordered_map<std::string, int> sb_map;      // 带宽映射，根据edge name获得带宽
+        std::unordered_map<std::string, int> sb_map;      // 带宽映射，根据edge name获得带宽        
 };
