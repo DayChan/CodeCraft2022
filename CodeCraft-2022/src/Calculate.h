@@ -4748,7 +4748,6 @@ class ContestCalculate {
             std::vector<std::vector<std::vector<std::pair<int, std::string>>>>(
                 io.client_names.size(),
                 std::vector<std::vector<std::pair<int, std::string>>>(io.edges_names.size())));
-
         // 进行两次分配，节点在第一次的分配中被分配过
         std::vector<bool> edge_alloc_in_first(io.edges_names.size());
         double rest_dist = 0;
@@ -4787,32 +4786,39 @@ class ContestCalculate {
 
             for (int i = 0; i < io.edges_names.size(); i++) {
                 int edge_idx = sort_edge_avg_dist_highest_value[i].second;
+                // 如果第一次尝试二轮分配时分配过，则跳过
+                // if (edge_alloc_in_first[edge_idx]) continue;
                 // 选取排序存储slot
-                std::vector<std::pair<int, int>>& sort_require = edge_require_sort[edge_idx];
+                std::vector<std::tuple<int, int, int>> sort_require(data_dm_rowstore.size());
                 // 边缘节点能被分配到的客户端节点
                 auto& clis = io.edge_dist_clients[edge_idx];
                 // 排序每个边缘节点能够分配到的客户端的需求总值
                 for (int j = 0; j < data_dm_rowstore.size(); j++) {
-                    std::vector<std::vector<std::pair<int, std::string>>>& row =
-                        data_dm_rowstore[j];
+                    std::vector<std::vector<std::pair<int, std::string>>>& row = data_dm_rowstore[j];
                     int sumrow = 0;
+                    int max_stream_sum = 0;
                     for (auto cli : clis) {
                         auto& cli_streams = row[cli];
+                        int max_stream = 0;
                         for (auto& cli_stream : cli_streams) {
                             sumrow += cli_stream.first;
+                            max_stream = std::max(cli_stream.first, max_stream);
                         }
+                        max_stream_sum += max_stream;
                     }
-                    sort_require[j] = {sumrow, j};
+                    sort_require[j] = {sumrow, max_stream_sum, j};
+                    // sort_require[j] = {max_stream_sum, sumrow, j};
                 }
                 // 也是从高到低排
                 std::sort(sort_require.begin(), sort_require.end(),
-                          std::greater<std::pair<int, int>>());
+                        [](const std::tuple<int, int, int>& i,
+                                const std::tuple<int, int, int>& j) { return i > j; });
 
                 int five_count = 0;   // 边缘节点分配次数的计数
                 int require_idx = 0;  // 需求排序后遍历的idx
-
                 while (five_count <= five_percent_time && require_idx < sort_require.size()) {
-                    int time = sort_require[require_idx].second;
+                    // int time = sort_require[require_idx].second;
+                    int time = std::get<2>(sort_require[require_idx]);
                     // 获取当前时间点边缘节点剩余的带宽
                     auto& sb_map_ref = sb_map_alltime_in[time];
                     std::vector<std::vector<std::pair<int, std::string>>>& row =
@@ -4820,42 +4826,34 @@ class ContestCalculate {
                     // 计算当前edge节点在当前时间点分配了多少
                     int dist_v_acc = 0;
 
-                    // 根据客户端的连通性排序当前节点可分配的客户端
-                    std::vector<std::pair<int, int>> sort_cli_edge_nums(clis.size());
-                    for (int j = 0; j < clis.size(); j++) {
-                        int cli_edge_nums = io.qos_map[clis[j]].size();
-                        sort_cli_edge_nums[j] = {cli_edge_nums, clis[j]};
-                    }
-                    // 从低到高排序
-                    std::sort(sort_cli_edge_nums.begin(), sort_cli_edge_nums.end());
-
-                    for (auto& cli : sort_cli_edge_nums) {
-                        int cli_idx = cli.second;
-                        std::sort(row[cli_idx].begin(), row[cli_idx].end(),
-                                  std::greater<std::pair<int, std::string>>());
-                        for (auto& cli_stream_dm : row[cli_idx]) {
-                            int& cli_dm = cli_stream_dm.first;
-                            if (cli_dm == 0)
-                                continue;  // 跳过需求为0的节点不分配，因为已经分配过了，或者没有需求
-                            // 暴力分配，只要节点有足够的带宽就将当前节点的所有流分配了，知道节点带宽不够
-                            // TODO:对节点的流需求进行排序
-
-                            int& edge_rest_sb = sb_map_ref[io.edges_names[edge_idx]];
-                            int dist_v = 0;
-                            if (edge_rest_sb >= cli_dm) {
-                                dist_v = cli_dm;
-                            } else {
-                                dist_v = 0;
-                            }
-                            if (dist_v) {
-                                edge_rest_sb -= dist_v;
-                                cli_dm -= dist_v;
-                                dist_v_acc += dist_v;
-                                // res[time][cli_idx][edge_idx].push_back(cli_stream_dm.second);
-                            }
+                    std::vector<std::tuple<int, int, int>> sort_cli_streams; // stream / stream_idx / cli_idx
+                    for(int idx=0; idx < clis.size(); idx++) {
+                        int cli_idx = clis[idx];
+                        auto& streams = row[cli_idx];
+                        for(int stream_idx=0; stream_idx < streams.size(); stream_idx++) {
+                            sort_cli_streams.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx});
                         }
                     }
-                    if (dist_v_acc != 0) five_count++;
+                    std::sort(sort_cli_streams.begin(), sort_cli_streams.end(), [](const std::tuple<int, int, int>& i,
+                                const std::tuple<int, int, int>& j) { return i > j; });
+
+                    int& edge_rest_sb = sb_map_ref[io.edges_names[edge_idx]];
+                    for (auto& sort_stream: sort_cli_streams) {
+                        int stream = std::get<0>(sort_stream);
+                        if(stream == 0) break;
+                        int stream_idx = std::get<1>(sort_stream);
+                        int cli_idx = std::get<2>(sort_stream);
+                        if (edge_rest_sb >= stream) {
+                            // res[time][cli_idx][edge_idx].push_back(row[cli_idx][stream_idx]);
+                            edge_rest_sb -= stream;
+                            row[cli_idx][stream_idx].first = 0;
+                            dist_v_acc += stream;
+                        }
+                    }
+                    if (dist_v_acc != 0)  {
+                        five_count++;
+                        // edge_5_percent_time[edge_idx].push_back(time);
+                    }
                     require_idx++;
                 }
             }
@@ -5099,30 +5097,36 @@ class ContestCalculate {
             // 如果第一次尝试二轮分配时分配过，则跳过
             if (edge_alloc_in_first[edge_idx]) continue;
             // 选取排序存储slot
-            std::vector<std::pair<int, int>>& sort_require = edge_require_sort[edge_idx];
+            std::vector<std::tuple<int, int, int>> sort_require(io.data_dm_rowstore.size());
             // 边缘节点能被分配到的客户端节点
             auto& clis = io.edge_dist_clients[edge_idx];
             // 排序每个边缘节点能够分配到的客户端的需求总值
             for (int j = 0; j < io.data_dm_rowstore.size(); j++) {
                 std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[j];
                 int sumrow = 0;
+                int max_stream_sum = 0;
                 for (auto cli : clis) {
                     auto& cli_streams = row[cli];
+                    int max_stream = 0;
                     for (auto& cli_stream : cli_streams) {
                         sumrow += cli_stream.first;
+                        max_stream = std::max(cli_stream.first, max_stream);
                     }
+                    max_stream_sum += max_stream;
                 }
-                sort_require[j] = {sumrow, j};
+                sort_require[j] = {sumrow, max_stream_sum, j};
+                // sort_require[j] = {max_stream_sum, sumrow, j};
             }
             // 也是从高到低排
             std::sort(sort_require.begin(), sort_require.end(),
-                      std::greater<std::pair<int, int>>());
+                      [](const std::tuple<int, int, int>& i,
+                             const std::tuple<int, int, int>& j) { return i > j; });
 
             int five_count = 0;   // 边缘节点分配次数的计数
             int require_idx = 0;  // 需求排序后遍历的idx
-
             while (five_count <= five_percent_time && require_idx < sort_require.size()) {
-                int time = sort_require[require_idx].second;
+                // int time = sort_require[require_idx].second;
+                int time = std::get<2>(sort_require[require_idx]);
                 // 获取当前时间点边缘节点剩余的带宽
                 auto& sb_map_ref = sb_map_alltime[time];
                 std::vector<std::vector<std::pair<int, std::string>>>& row =
@@ -5130,118 +5134,34 @@ class ContestCalculate {
                 // 计算当前edge节点在当前时间点分配了多少
                 int dist_v_acc = 0;
 
-                // 根据客户端的连通性排序当前节点可分配的客户端
-                std::vector<std::pair<int, int>> sort_cli_edge_nums(clis.size());
-                for (int j = 0; j < clis.size(); j++) {
-                    int cli_edge_nums = io.qos_map[clis[j]].size();
-                    sort_cli_edge_nums[j] = {cli_edge_nums, clis[j]};
-                }
-                // 从低到高排序
-                std::sort(sort_cli_edge_nums.begin(), sort_cli_edge_nums.end());
-
-                for (auto& cli : sort_cli_edge_nums) {
-                    int cli_idx = cli.second;
-                    std::sort(row[cli_idx].begin(), row[cli_idx].end(),
-                              std::greater<std::pair<int, std::string>>());
-                    for (auto& cli_stream_dm : row[cli_idx]) {
-                        int& cli_dm = cli_stream_dm.first;
-                        if (cli_dm == 0)
-                            continue;  // 跳过需求为0的节点不分配，因为已经分配过了，或者没有需求
-                        // 暴力分配，只要节点有足够的带宽就将当前节点的所有流分配了，知道节点带宽不够
-                        // TODO:对节点的流需求进行排序
-
-                        int& edge_rest_sb = sb_map_ref[io.edges_names[edge_idx]];
-                        int dist_v = 0;
-                        if (edge_rest_sb >= cli_dm) {
-                            dist_v = cli_dm;
-                        } else {
-                            dist_v = 0;
-                        }
-                        if (dist_v) {
-                            res[time][cli_idx][edge_idx].push_back(cli_stream_dm);
-                            edge_rest_sb -= dist_v;
-                            cli_dm -= dist_v;
-                            dist_v_acc += dist_v;
-                        }
+                std::vector<std::tuple<int, int, int>> sort_cli_streams; // stream / stream_idx / cli_idx
+                for(int idx=0; idx < clis.size(); idx++) {
+                    int cli_idx = clis[idx];
+                    auto& streams = row[cli_idx];
+                    for(int stream_idx=0; stream_idx < streams.size(); stream_idx++) {
+                        sort_cli_streams.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx});
                     }
                 }
-                if (dist_v_acc != 0) five_count++;
-                require_idx++;
-            }
-        }
+                std::sort(sort_cli_streams.begin(), sort_cli_streams.end(), [](const std::tuple<int, int, int>& i,
+                             const std::tuple<int, int, int>& j) { return i > j; });
 
-        for (int i = 0; i < io.edges_names.size(); i++) {
-            int edge_idx = sort_edge_avg_dist_highest_value[i].second;
-            // 如果第一次尝试二轮分配时分配过，则跳过
-            if (!edge_alloc_in_first[edge_idx]) continue;
-            // 选取排序存储slot
-            std::vector<std::pair<int, int>>& sort_require = edge_require_sort[edge_idx];
-            // 边缘节点能被分配到的客户端节点
-            auto& clis = io.edge_dist_clients[edge_idx];
-            // 排序每个边缘节点能够分配到的客户端的需求总值
-            for (int j = 0; j < io.data_dm_rowstore.size(); j++) {
-                std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[j];
-                int sumrow = 0;
-                for (auto cli : clis) {
-                    auto& cli_streams = row[cli];
-                    for (auto& cli_stream : cli_streams) {
-                        sumrow += cli_stream.first;
+                int& edge_rest_sb = sb_map_ref[io.edges_names[edge_idx]];
+                for (auto& sort_stream: sort_cli_streams) {
+                    int stream = std::get<0>(sort_stream);
+                    if(stream == 0) break;
+                    int stream_idx = std::get<1>(sort_stream);
+                    int cli_idx = std::get<2>(sort_stream);
+                    if (edge_rest_sb >= stream) {
+                        res[time][cli_idx][edge_idx].push_back(row[cli_idx][stream_idx]);
+                        edge_rest_sb -= stream;
+                        row[cli_idx][stream_idx].first = 0;
+                        dist_v_acc += stream;
                     }
                 }
-                sort_require[j] = {sumrow, j};
-            }
-            // 也是从高到低排
-            std::sort(sort_require.begin(), sort_require.end(),
-                      std::greater<std::pair<int, int>>());
-
-            int five_count = 0;   // 边缘节点分配次数的计数
-            int require_idx = 0;  // 需求排序后遍历的idx
-
-            while (five_count <= second_time && require_idx < sort_require.size()) {
-                int time = sort_require[require_idx].second;
-                // 获取当前时间点边缘节点剩余的带宽
-                auto& sb_map_ref = sb_map_alltime[time];
-                std::vector<std::vector<std::pair<int, std::string>>>& row =
-                    io.data_dm_rowstore[time];
-                // 计算当前edge节点在当前时间点分配了多少
-                int dist_v_acc = 0;
-
-                // 根据客户端的连通性排序当前节点可分配的客户端
-                std::vector<std::pair<int, int>> sort_cli_edge_nums(clis.size());
-                for (int j = 0; j < clis.size(); j++) {
-                    int cli_edge_nums = io.qos_map[clis[j]].size();
-                    sort_cli_edge_nums[j] = {cli_edge_nums, clis[j]};
+                if (dist_v_acc != 0)  {
+                    five_count++;
+                    // edge_5_percent_time[edge_idx].push_back(time);
                 }
-                // 从低到高排序
-                std::sort(sort_cli_edge_nums.begin(), sort_cli_edge_nums.end());
-
-                for (auto& cli : sort_cli_edge_nums) {
-                    int cli_idx = cli.second;
-                    std::sort(row[cli_idx].begin(), row[cli_idx].end(),
-                              std::greater<std::pair<int, std::string>>());
-                    for (auto& cli_stream_dm : row[cli_idx]) {
-                        int& cli_dm = cli_stream_dm.first;
-                        if (cli_dm == 0)
-                            continue;  // 跳过需求为0的节点不分配，因为已经分配过了，或者没有需求
-                        // 暴力分配，只要节点有足够的带宽就将当前节点的所有流分配了，知道节点带宽不够
-                        // TODO:对节点的流需求进行排序
-
-                        int& edge_rest_sb = sb_map_ref[io.edges_names[edge_idx]];
-                        int dist_v = 0;
-                        if (edge_rest_sb >= cli_dm) {
-                            dist_v = cli_dm;
-                        } else {
-                            dist_v = 0;
-                        }
-                        if (dist_v) {
-                            res[time][cli_idx][edge_idx].push_back(cli_stream_dm);
-                            edge_rest_sb -= dist_v;
-                            cli_dm -= dist_v;
-                            dist_v_acc += dist_v;
-                        }
-                    }
-                }
-                if (dist_v_acc != 0) five_count++;
                 require_idx++;
             }
         }
@@ -6427,7 +6347,8 @@ class ContestCalculate {
     }
 
     
-    // 训练赛分数676841 佳玺数据集分数1185w
+    // 使用max_stream_sum排序，训练赛分数683472 佳玺数据集分数1170w
+    // 使用sumrow排序，训练赛分数602577，佳玺1153w
     void brute_force5() {
         // this->calculate_each_edge_avg_upper_bound(avg_cost);
         edge_5_percent_time.resize(io.edges_names.size());
@@ -6560,9 +6481,11 @@ class ContestCalculate {
             }
         }
         // 从高到低排
-        std::sort(sort_stream.begin(), sort_stream.end(), 
+        std::sort(sort_stream.begin(), sort_stream.end()
+                    , 
                     [](const std::tuple<int, int, int, int>& i,
-                    const std::tuple<int, int, int, int>& j) { return i > j; });
+                    const std::tuple<int, int, int, int>& j) { return i > j; }
+                    );
 
         int pos_94 = 0.05 * res.size();
         std::vector<std::vector<std::pair<int, int>>> edge_sort_score(
@@ -6588,7 +6511,7 @@ class ContestCalculate {
             int stream_idx = std::get<1>(sort_stream[st]);
             int stream = std::get<0>(sort_stream[st]);
             // if(st < 100) std::cout << st << " " << stream << std::endl;
-            if(stream == 0) break;
+            if(stream == 0) continue;
             int edge_choose = calculate_best_edge(time, cli_idx, stream);
             
             int& edge_rest_sb = sb_map_alltime[time][io.edges_names[edge_choose]];
@@ -6875,12 +6798,752 @@ class ContestCalculate {
         return;
     }
 
+    // 全5%+纯暴力分，线上77w，佳玺2000w
+    void brute_force6() {
+        // this->calculate_each_edge_avg_upper_bound(avg_cost);
+        edge_5_percent_time.resize(io.edges_names.size());
+        edge_94_dist.resize(io.edges_names.size(), 0);
+        res.resize(
+            io.data_dm_rowstore.size(),
+            std::vector<std::vector<std::vector<std::pair<int, std::string>>>>(
+                io.client_names.size(),
+                std::vector<std::vector<std::pair<int, std::string>>>(io.edges_names.size())));
+        int highest_time = 5;
+
+        // !开始正式分配
+        // 边缘节点分配的时间
+        std::vector<int> edge_times(io.edges_names.size(), 0);
+
+        // 百分之五的时间点个数
+        int five_percent_time = io.data_dm_rowstore.size() * 0.05 - 1;
+
+        int second_time = io.data_dm_rowstore.size() * 0.02 - 1;
+
+        // 已经超分配到边
+        std::vector<bool> edge_exceed(io.edges_names.size(), false);
+
+        // edge节点超分配的最大值
+        std::vector<int> edge_max_record(io.edges_names.size(), 0);
+
+        // // 对所有边缘节点可分配的客户端总需求排序存储的数据结构
+        // // edge_id / 时间点idx / {客户端需求的和，对应时间点idx}
+        // std::vector<std::vector<std::pair<int, int>>> edge_require_sort(
+        //     io.edges_names.size(),
+        //     std::vector<std::pair<int, int>>(io.data_dm_rowstore.size(), {0, 0}));
+
+        // 开始第一轮分配，第一轮分配是面向边缘节点分配
+        // 按照节点可分配的客户端能分配到的平均值，对边缘节点进行排序。加0.1是为了避免除0
+        std::vector<std::pair<double, int>> sort_edge_avg_dist_highest_value;
+        for (size_t i = 0; i < io.edges_names.size(); i++) {
+            sort_edge_avg_dist_highest_value.push_back(
+                {io.sb_map[io.edges_names[i]] / (io.edge_dist_num[i] + 0.1), i});
+        }
+        // 从高到低排
+        std::sort(sort_edge_avg_dist_highest_value.begin(), sort_edge_avg_dist_highest_value.end(),
+                  std::greater<std::pair<double, int>>());
+
+        for (int i = 0; i < io.edges_names.size(); i++) {
+            int edge_idx = sort_edge_avg_dist_highest_value[i].second;
+            // 如果第一次尝试二轮分配时分配过，则跳过
+            // if (edge_alloc_in_first[edge_idx]) continue;
+            // 选取排序存储slot
+            std::vector<std::tuple<int, int, int>> sort_require(io.data_dm_rowstore.size());
+            // 边缘节点能被分配到的客户端节点
+            auto& clis = io.edge_dist_clients[edge_idx];
+            // 排序每个边缘节点能够分配到的客户端的需求总值
+            for (int j = 0; j < io.data_dm_rowstore.size(); j++) {
+                std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[j];
+                int sumrow = 0;
+                int max_stream_sum = 0;
+                for (auto cli : clis) {
+                    auto& cli_streams = row[cli];
+                    int max_stream = 0;
+                    for (auto& cli_stream : cli_streams) {
+                        sumrow += cli_stream.first;
+                        max_stream = std::max(cli_stream.first, max_stream);
+                    }
+                    max_stream_sum += max_stream;
+                }
+                // sort_require[j] = {sumrow, max_stream, j};
+                // sort_require[j] = {max_stream_sum, sumrow, j};
+                sort_require[j] = {sumrow, max_stream_sum, j};
+            }
+            // 也是从高到低排
+            std::sort(sort_require.begin(), sort_require.end(),
+                      [](const std::tuple<int, int, int>& i,
+                             const std::tuple<int, int, int>& j) { return i > j; });
+
+            int five_count = 0;   // 边缘节点分配次数的计数
+            int require_idx = 0;  // 需求排序后遍历的idx
+            while (five_count <= five_percent_time && require_idx < sort_require.size()) {
+                // int time = sort_require[require_idx].second;
+                int time = std::get<2>(sort_require[require_idx]);
+                // 获取当前时间点边缘节点剩余的带宽
+                auto& sb_map_ref = sb_map_alltime[time];
+                std::vector<std::vector<std::pair<int, std::string>>>& row =
+                    io.data_dm_rowstore[time];
+                // 计算当前edge节点在当前时间点分配了多少
+                int dist_v_acc = 0;
+
+                std::vector<std::tuple<int, int, int>> sort_cli_streams; // stream / stream_idx / cli_idx
+                for(int idx=0; idx < clis.size(); idx++) {
+                    int cli_idx = clis[idx];
+                    auto& streams = row[cli_idx];
+                    for(int stream_idx=0; stream_idx < streams.size(); stream_idx++) {
+                        sort_cli_streams.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx});
+                    }
+                }
+                std::sort(sort_cli_streams.begin(), sort_cli_streams.end(), [](const std::tuple<int, int, int>& i,
+                             const std::tuple<int, int, int>& j) { return i > j; });
+
+                int& edge_rest_sb = sb_map_ref[io.edges_names[edge_idx]];
+                for (auto& sort_stream: sort_cli_streams) {
+                    int stream = std::get<0>(sort_stream);
+                    if(stream == 0) break;
+                    int stream_idx = std::get<1>(sort_stream);
+                    int cli_idx = std::get<2>(sort_stream);
+                    if (edge_rest_sb >= stream) {
+                        res[time][cli_idx][edge_idx].push_back(row[cli_idx][stream_idx]);
+                        edge_rest_sb -= stream;
+                        row[cli_idx][stream_idx].first = 0;
+                        dist_v_acc += stream;
+                    }
+                }
+                if (dist_v_acc != 0)  {
+                    five_count++;
+                    edge_5_percent_time[edge_idx].push_back(time);
+                }
+                require_idx++;
+            }
+        }
+        // 以上5%分配完
+
+        // 开始第二轮分配，第二轮分配是面向客户节点分配
+        // 对所有客户节点总需求量排序，以此选择时间点
+        std::vector<std::tuple<int, int, int, int>> sort_stream;
+
+        for (int i = 0; i < io.data_dm_rowstore.size(); i++) {
+            std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[i];
+            for (int cli_idx=0; cli_idx < row.size(); cli_idx++) {
+                for (int stream_idx=0; stream_idx < row[cli_idx].size(); stream_idx++) {
+                    sort_stream.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx, i});
+                }
+            }
+        }
+        // 从高到低排
+        std::sort(sort_stream.begin(), sort_stream.end(), 
+                    [](const std::tuple<int, int, int, int>& i,
+                    const std::tuple<int, int, int, int>& j) { return i > j; });
+
+        int pos_94 = 0.05 * res.size();
+        std::vector<std::vector<std::pair<int, int>>> edge_sort_score(
+            io.edges_names.size(), std::vector<std::pair<int, int>>(res.size()));
+
+        for (int time = 0; time < res.size(); time++) {
+            for (int edge_idx = 0; edge_idx < io.edges_names.size(); edge_idx++) {
+                int edge_dist = io.sb_map[io.edges_names[edge_idx]] -
+                                sb_map_alltime[time][io.edges_names[edge_idx]];
+                edge_sort_score[edge_idx][time] = {edge_dist, time};
+            }
+        }
+        double sum = 0;
+        for (int edge_idx = 0; edge_idx < io.edges_names.size(); edge_idx++) {
+            auto edge_score = edge_sort_score[edge_idx];
+            std::sort(edge_score.begin(), edge_score.end(), std::greater<std::pair<int, int>>());
+            edge_94_dist[edge_idx] = edge_score[pos_94].first;
+            
+        }
+        for (size_t st = 0; st < sort_stream.size(); st++) {
+            int time = std::get<3>(sort_stream[st]);
+            int cli_idx = std::get<2>(sort_stream[st]);
+            int stream_idx = std::get<1>(sort_stream[st]);
+            int stream = std::get<0>(sort_stream[st]);
+            // if(st < 100) std::cout << st << " " << stream << std::endl;
+            if(stream == 0) break;
+            int edge_choose = calculate_best_edge3(time, cli_idx, stream);
+            
+            int& edge_rest_sb = sb_map_alltime[time][io.edges_names[edge_choose]];
+            auto& cli_stream = io.data_dm_rowstore[time][cli_idx][stream_idx];
+
+            // 添加结果
+            res[time][cli_idx][edge_choose].push_back(cli_stream);
+            // 分配值为客户端需求
+            int dist_v = cli_stream.first;
+            // 减去边缘节点剩余带宽
+            edge_rest_sb -= dist_v;
+            // 客户节点当前流的需求置0
+            cli_stream.first = cli_stream.first - dist_v;
+
+            int edge_dist_now = io.sb_map[io.edges_names[edge_choose]] - edge_rest_sb;
+            if(edge_dist_now > edge_94_dist[edge_choose]) {
+                bool is_in_5_percent = false;
+                for (auto time_5 : edge_5_percent_time[edge_choose]) {
+                    if(time == time_5) is_in_5_percent = true;
+                }
+                if(!is_in_5_percent) edge_94_dist[edge_choose] = edge_dist_now;
+            }
+            edge_94_dist[edge_choose] = std::max(edge_94_dist[edge_choose], edge_dist_now);
+            
+        }
+        return;
+    }
+
+    // choose edge 线上调试second参数0.5 + redist 516717
+    void brute_force7(double edge_choose_rate_first, double edge_choose_rate_second) {
+        // this->calculate_each_edge_avg_upper_bound(avg_cost);
+        int edge_choose_num_first = io.edges_names.size() * edge_choose_rate_first;
+        int edge_choose_num = io.edges_names.size() * edge_choose_rate_second;
+        edge_choosed_and_sort_by_dist_num_first_round_bitmap.resize(io.edges_names.size(), false);
+        edge_choosed_and_sort_by_dist_num_bitmap.resize(io.edges_names.size(), false);
+        edge_choosed_and_sort_by_dist_num.resize(edge_choose_num);
+
+        std::vector<std::pair<int, int>> edge_dist_sort(io.edges_names.size());
+        for(int i=0; i<io.edges_names.size(); i++) {
+            edge_dist_sort[i] = {io.edge_dist_num[i], i};
+        }
+        std::sort(edge_dist_sort.begin(), edge_dist_sort.end(), std::greater<std::pair<int, int>>());
+
+        
+        for(int i=0; i<edge_choose_num; i++) {
+            edge_choosed_and_sort_by_dist_num_bitmap[edge_dist_sort[i].second] = true;
+            edge_choosed_and_sort_by_dist_num[i] = edge_dist_sort[i].second;
+        }
+
+        edge_5_percent_time.resize(io.edges_names.size());
+        edge_94_dist.resize(io.edges_names.size(), 0);
+        res.resize(
+            io.data_dm_rowstore.size(),
+            std::vector<std::vector<std::vector<std::pair<int, std::string>>>>(
+                io.client_names.size(),
+                std::vector<std::vector<std::pair<int, std::string>>>(io.edges_names.size())));
+        int highest_time = 5;
+
+        // !开始正式分配
+        // 边缘节点分配的时间
+        std::vector<int> edge_times(io.edges_names.size(), 0);
+
+        // 百分之五的时间点个数
+        int five_percent_time = io.data_dm_rowstore.size() * 0.05 - 1;
+
+        int second_time = io.data_dm_rowstore.size() * 0.02 - 1;
+
+        // 已经超分配到边
+        std::vector<bool> edge_exceed(io.edges_names.size(), false);
+
+        // edge节点超分配的最大值
+        std::vector<int> edge_max_record(io.edges_names.size(), 0);
+
+        // 对所有边缘节点可分配的客户端总需求排序存储的数据结构
+        // edge_id / 时间点idx / {客户端需求的和，对应时间点idx}
+        std::vector<std::vector<std::pair<int, int>>> edge_require_sort(
+            io.edges_names.size(),
+            std::vector<std::pair<int, int>>(io.data_dm_rowstore.size(), {0, 0}));
+
+        // 开始第一轮分配，第一轮分配是面向边缘节点分配
+        // 按照节点可分配的客户端能分配到的平均值，对边缘节点进行排序。加0.1是为了避免除0
+        
+        std::vector<std::pair<double, int>> sort_edge_avg_dist_highest_value;
+        for (size_t i = 0; i < io.edges_names.size(); i++) {
+            sort_edge_avg_dist_highest_value.push_back(
+                // {io.edge_dist_num[i], i});
+                {io.sb_map[io.edges_names[i]] / (io.edge_dist_num[i] + 0.1), i});
+                // {io.sb_map[io.edges_names[i]], i});
+        }
+        // 从高到低排
+        std::sort(sort_edge_avg_dist_highest_value.begin(), sort_edge_avg_dist_highest_value.end(),
+                  std::greater<std::pair<double, int>>());
+
+        for (int i=0; i<edge_choose_num_first; i++) {
+            int start = sort_edge_avg_dist_highest_value.size() - edge_choose_num_first;
+            edge_choosed_and_sort_by_dist_num_first_round_bitmap[sort_edge_avg_dist_highest_value[start + i].second] = true;
+        }
+        // for (int i=0; i<edge_choose_num_first; i++) {
+        //     edge_choosed_and_sort_by_dist_num_first_round_bitmap[sort_edge_avg_dist_highest_value[i].second] = true;
+        // }
+
+        for (int i = 0; i < sort_edge_avg_dist_highest_value.size(); i++) {
+            int edge_idx = sort_edge_avg_dist_highest_value[i].second;
+            if(!edge_choosed_and_sort_by_dist_num_first_round_bitmap[edge_idx]) continue;
+            // 如果第一次尝试二轮分配时分配过，则跳过
+            // if (edge_alloc_in_first[edge_idx]) continue;
+            // 选取排序存储slot
+            std::vector<std::tuple<int, int, int>> sort_require(io.data_dm_rowstore.size());
+            // 边缘节点能被分配到的客户端节点
+            auto& clis = io.edge_dist_clients[edge_idx];
+            // 排序每个边缘节点能够分配到的客户端的需求总值
+            for (int j = 0; j < io.data_dm_rowstore.size(); j++) {
+                std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[j];
+                int sumrow = 0;
+                int max_stream_sum = 0;
+                for (auto cli : clis) {
+                    auto& cli_streams = row[cli];
+                    int max_stream = 0;
+                    for (auto& cli_stream : cli_streams) {
+                        sumrow += cli_stream.first;
+                        max_stream = std::max(cli_stream.first, max_stream);
+                    }
+                    max_stream_sum += max_stream;
+                }
+                // sort_require[j] = {sumrow, max_stream, j};
+                // sort_require[j] = {max_stream_sum, sumrow, j};
+                sort_require[j] = {sumrow, max_stream_sum, j};
+            }
+            // 也是从高到低排
+            std::sort(sort_require.begin(), sort_require.end(),
+                      [](const std::tuple<int, int, int>& i,
+                             const std::tuple<int, int, int>& j) { return i > j; });
+
+            int five_count = 0;   // 边缘节点分配次数的计数
+            int require_idx = 0;  // 需求排序后遍历的idx
+            while (five_count <= five_percent_time && require_idx < sort_require.size()) {
+                // int time = sort_require[require_idx].second;
+                int time = std::get<2>(sort_require[require_idx]);
+                // 获取当前时间点边缘节点剩余的带宽
+                auto& sb_map_ref = sb_map_alltime[time];
+                std::vector<std::vector<std::pair<int, std::string>>>& row =
+                    io.data_dm_rowstore[time];
+                // 计算当前edge节点在当前时间点分配了多少
+                int dist_v_acc = 0;
+
+                std::vector<std::tuple<int, int, int>> sort_cli_streams; // stream / stream_idx / cli_idx
+                for(int idx=0; idx < clis.size(); idx++) {
+                    int cli_idx = clis[idx];
+                    auto& streams = row[cli_idx];
+                    for(int stream_idx=0; stream_idx < streams.size(); stream_idx++) {
+                        sort_cli_streams.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx});
+                    }
+                }
+                std::sort(sort_cli_streams.begin(), sort_cli_streams.end(), [](const std::tuple<int, int, int>& i,
+                             const std::tuple<int, int, int>& j) { return i > j; });
+
+                int& edge_rest_sb = sb_map_ref[io.edges_names[edge_idx]];
+                for (auto& sort_stream: sort_cli_streams) {
+                    int stream = std::get<0>(sort_stream);
+                    if(stream == 0) break;
+                    int stream_idx = std::get<1>(sort_stream);
+                    int cli_idx = std::get<2>(sort_stream);
+                    if (edge_rest_sb >= stream) {
+                        res[time][cli_idx][edge_idx].push_back(row[cli_idx][stream_idx]);
+                        edge_rest_sb -= stream;
+                        row[cli_idx][stream_idx].first = 0;
+                        dist_v_acc += stream;
+                    }
+                }
+                if (dist_v_acc != 0)  {
+                    five_count++;
+                    edge_5_percent_time[edge_idx].push_back(time);
+                }
+                require_idx++;
+            }
+        }
+        // 以上5%分配完
+
+        // 开始第二轮分配，第二轮分配是面向客户节点分配
+        // 对所有客户节点总需求量排序，以此选择时间点
+        std::vector<std::tuple<int, int, int, int>> sort_stream;
+
+        for (int i = 0; i < io.data_dm_rowstore.size(); i++) {
+            std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[i];
+            for (int cli_idx=0; cli_idx < row.size(); cli_idx++) {
+                for (int stream_idx=0; stream_idx < row[cli_idx].size(); stream_idx++) {
+                    sort_stream.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx, i});
+                }
+            }
+        }
+        // 从高到低排
+        std::sort(sort_stream.begin(), sort_stream.end(), 
+                    [](const std::tuple<int, int, int, int>& i,
+                    const std::tuple<int, int, int, int>& j) { return i > j; });
+
+        int pos_94 = 0.05 * res.size();
+        std::vector<std::vector<std::pair<int, int>>> edge_sort_score(
+            io.edges_names.size(), std::vector<std::pair<int, int>>(res.size()));
+
+        for (int time = 0; time < res.size(); time++) {
+            for (int edge_idx = 0; edge_idx < io.edges_names.size(); edge_idx++) {
+                int edge_dist = io.sb_map[io.edges_names[edge_idx]] -
+                                sb_map_alltime[time][io.edges_names[edge_idx]];
+                edge_sort_score[edge_idx][time] = {edge_dist, time};
+            }
+        }
+        double sum = 0;
+        for (int edge_idx = 0; edge_idx < io.edges_names.size(); edge_idx++) {
+            auto edge_score = edge_sort_score[edge_idx];
+            std::sort(edge_score.begin(), edge_score.end(), std::greater<std::pair<int, int>>());
+            edge_94_dist[edge_idx] = edge_score[pos_94].first;
+            
+        }
+        for (size_t st = 0; st < sort_stream.size(); st++) {
+            int time = std::get<3>(sort_stream[st]);
+            int cli_idx = std::get<2>(sort_stream[st]);
+            int stream_idx = std::get<1>(sort_stream[st]);
+            int stream = std::get<0>(sort_stream[st]);
+            // if(st < 100) std::cout << st << " " << stream << std::endl;
+            if(stream == 0) break;
+            int edge_choose = calculate_best_edge_with_choose_edge(time, cli_idx, stream);
+            if (edge_choose == -1) continue;
+            int& edge_rest_sb = sb_map_alltime[time][io.edges_names[edge_choose]];
+            auto& cli_stream = io.data_dm_rowstore[time][cli_idx][stream_idx];
+
+            // 添加结果
+            res[time][cli_idx][edge_choose].push_back(cli_stream);
+            // 分配值为客户端需求
+            int dist_v = cli_stream.first;
+            // 减去边缘节点剩余带宽
+            edge_rest_sb -= dist_v;
+            // 客户节点当前流的需求置0
+            cli_stream.first = cli_stream.first - dist_v;
+
+            int edge_dist_now = io.sb_map[io.edges_names[edge_choose]] - edge_rest_sb;
+            if(edge_dist_now > edge_94_dist[edge_choose]) {
+                bool is_in_5_percent = false;
+                for (auto time_5 : edge_5_percent_time[edge_choose]) {
+                    if(time == time_5) is_in_5_percent = true;
+                }
+                if(!is_in_5_percent) edge_94_dist[edge_choose] = edge_dist_now;
+            }
+            edge_94_dist[edge_choose] = std::max(edge_94_dist[edge_choose], edge_dist_now);
+            
+        }
+
+        sort_stream.clear();
+
+        for (int i = 0; i < io.data_dm_rowstore.size(); i++) {
+            std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[i];
+            for (int cli_idx=0; cli_idx < row.size(); cli_idx++) {
+                for (int stream_idx=0; stream_idx < row[cli_idx].size(); stream_idx++) {
+                    sort_stream.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx, i});
+                }
+            }
+        }
+
+        // 从高到低排
+        std::sort(sort_stream.begin(), sort_stream.end(), 
+                    [](const std::tuple<int, int, int, int>& i,
+                    const std::tuple<int, int, int, int>& j) { return i > j; });
+
+        for (size_t st = 0; st < sort_stream.size(); st++) {
+            int time = std::get<3>(sort_stream[st]);
+            int cli_idx = std::get<2>(sort_stream[st]);
+            int stream_idx = std::get<1>(sort_stream[st]);
+            int stream = std::get<0>(sort_stream[st]);
+            // if(st < 100) std::cout << st << " " << stream << std::endl;
+            if(stream == 0) break;
+            int edge_choose = calculate_best_edge3(time, cli_idx, stream);
+            int& edge_rest_sb = sb_map_alltime[time][io.edges_names[edge_choose]];
+            auto& cli_stream = io.data_dm_rowstore[time][cli_idx][stream_idx];
+
+            // 添加结果
+            res[time][cli_idx][edge_choose].push_back(cli_stream);
+            // 分配值为客户端需求
+            int dist_v = cli_stream.first;
+            // 减去边缘节点剩余带宽
+            edge_rest_sb -= dist_v;
+            // 客户节点当前流的需求置0
+            cli_stream.first = cli_stream.first - dist_v;
+
+            int edge_dist_now = io.sb_map[io.edges_names[edge_choose]] - edge_rest_sb;
+            if(edge_dist_now > edge_94_dist[edge_choose]) {
+                bool is_in_5_percent = false;
+                for (auto time_5 : edge_5_percent_time[edge_choose]) {
+                    if(time == time_5) is_in_5_percent = true;
+                }
+                if(!is_in_5_percent) edge_94_dist[edge_choose] = edge_dist_now;
+            }
+            edge_94_dist[edge_choose] = std::max(edge_94_dist[edge_choose], edge_dist_now);
+            
+        }
+
+        return;
+    }
+
+
+    // 
+    void brute_force7_with_edge_limit(double avg_coefficient, double edge_choose_rate) {
+        // this->calculate_each_edge_avg_upper_bound(avg_cost);
+        int edge_choose_num = io.edges_names.size() * edge_choose_rate;
+        edge_choosed_and_sort_by_dist_num_bitmap.resize(io.edges_names.size(), false);
+        edge_choosed_and_sort_by_dist_num.resize(edge_choose_num);
+
+        std::vector<std::pair<int, int>> edge_dist_sort(io.edges_names.size());
+        for(int i=0; i<io.edges_names.size(); i++) {
+            edge_dist_sort[i] = {io.edge_dist_num[i], i};
+        }
+        std::sort(edge_dist_sort.begin(), edge_dist_sort.end(), std::greater<std::pair<int, int>>());
+
+        
+        for(int i=0; i<edge_choose_num; i++) {
+            edge_choosed_and_sort_by_dist_num_bitmap[edge_dist_sort[i].second] = true;
+            edge_choosed_and_sort_by_dist_num[i] = edge_dist_sort[i].second;
+        }
+
+        edge_5_percent_time.resize(io.edges_names.size());
+        edge_94_dist.resize(io.edges_names.size(), 0);
+        res.resize(
+            io.data_dm_rowstore.size(),
+            std::vector<std::vector<std::vector<std::pair<int, std::string>>>>(
+                io.client_names.size(),
+                std::vector<std::vector<std::pair<int, std::string>>>(io.edges_names.size())));
+        int highest_time = 5;
+
+        // !开始正式分配
+        // 边缘节点分配的时间
+        std::vector<int> edge_times(io.edges_names.size(), 0);
+
+        // 百分之五的时间点个数
+        int five_percent_time = io.data_dm_rowstore.size() * 0.05 - 1;
+
+        int second_time = io.data_dm_rowstore.size() * 0.02 - 1;
+
+        // 已经超分配到边
+        std::vector<bool> edge_exceed(io.edges_names.size(), false);
+
+        // edge节点超分配的最大值
+        std::vector<int> edge_max_record(io.edges_names.size(), 0);
+
+        // 对所有边缘节点可分配的客户端总需求排序存储的数据结构
+        // edge_id / 时间点idx / {客户端需求的和，对应时间点idx}
+        std::vector<std::vector<std::pair<int, int>>> edge_require_sort(
+            io.edges_names.size(),
+            std::vector<std::pair<int, int>>(io.data_dm_rowstore.size(), {0, 0}));
+
+        // 开始第一轮分配，第一轮分配是面向边缘节点分配
+        // 按照节点可分配的客户端能分配到的平均值，对边缘节点进行排序。加0.1是为了避免除0
+        
+        std::vector<std::pair<double, int>> sort_edge_avg_dist_highest_value;
+        for (size_t i = 0; i < io.edges_names.size(); i++) {
+            sort_edge_avg_dist_highest_value.push_back(
+                {io.sb_map[io.edges_names[i]] / (io.edge_dist_num[i] + 0.1), i});
+        }
+        // 从高到低排
+        std::sort(sort_edge_avg_dist_highest_value.begin(), sort_edge_avg_dist_highest_value.end(),
+                  std::greater<std::pair<double, int>>());
+
+        for (int i = 0; i < sort_edge_avg_dist_highest_value.size(); i++) {
+            int edge_idx = edge_choosed_and_sort_by_dist_num[edge_choosed_and_sort_by_dist_num.size() - 1 - i];
+            // 如果第一次尝试二轮分配时分配过，则跳过
+            // if (edge_alloc_in_first[edge_idx]) continue;
+            // 选取排序存储slot
+            std::vector<std::tuple<int, int, int>> sort_require(io.data_dm_rowstore.size());
+            // 边缘节点能被分配到的客户端节点
+            auto& clis = io.edge_dist_clients[edge_idx];
+            // 排序每个边缘节点能够分配到的客户端的需求总值
+            for (int j = 0; j < io.data_dm_rowstore.size(); j++) {
+                std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[j];
+                int sumrow = 0;
+                int max_stream_sum = 0;
+                for (auto cli : clis) {
+                    auto& cli_streams = row[cli];
+                    int max_stream = 0;
+                    for (auto& cli_stream : cli_streams) {
+                        sumrow += cli_stream.first;
+                        max_stream = std::max(cli_stream.first, max_stream);
+                    }
+                    max_stream_sum += max_stream;
+                }
+                // sort_require[j] = {sumrow, max_stream, j};
+                // sort_require[j] = {max_stream_sum, sumrow, j};
+                sort_require[j] = {sumrow, max_stream_sum, j};
+            }
+            // 也是从高到低排
+            std::sort(sort_require.begin(), sort_require.end(),
+                      [](const std::tuple<int, int, int>& i,
+                             const std::tuple<int, int, int>& j) { return i > j; });
+
+            int five_count = 0;   // 边缘节点分配次数的计数
+            int require_idx = 0;  // 需求排序后遍历的idx
+            while (five_count <= five_percent_time && require_idx < sort_require.size()) {
+                // int time = sort_require[require_idx].second;
+                int time = std::get<2>(sort_require[require_idx]);
+                // 获取当前时间点边缘节点剩余的带宽
+                auto& sb_map_ref = sb_map_alltime[time];
+                std::vector<std::vector<std::pair<int, std::string>>>& row =
+                    io.data_dm_rowstore[time];
+                // 计算当前edge节点在当前时间点分配了多少
+                int dist_v_acc = 0;
+
+                std::vector<std::tuple<int, int, int>> sort_cli_streams; // stream / stream_idx / cli_idx
+                for(int idx=0; idx < clis.size(); idx++) {
+                    int cli_idx = clis[idx];
+                    auto& streams = row[cli_idx];
+                    for(int stream_idx=0; stream_idx < streams.size(); stream_idx++) {
+                        sort_cli_streams.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx});
+                    }
+                }
+                std::sort(sort_cli_streams.begin(), sort_cli_streams.end(), [](const std::tuple<int, int, int>& i,
+                             const std::tuple<int, int, int>& j) { return i > j; });
+
+                int& edge_rest_sb = sb_map_ref[io.edges_names[edge_idx]];
+                for (auto& sort_stream: sort_cli_streams) {
+                    int stream = std::get<0>(sort_stream);
+                    if(stream == 0) break;
+                    int stream_idx = std::get<1>(sort_stream);
+                    int cli_idx = std::get<2>(sort_stream);
+                    if (edge_rest_sb >= stream) {
+                        res[time][cli_idx][edge_idx].push_back(row[cli_idx][stream_idx]);
+                        edge_rest_sb -= stream;
+                        row[cli_idx][stream_idx].first = 0;
+                        dist_v_acc += stream;
+                    }
+                }
+                if (dist_v_acc != 0)  {
+                    five_count++;
+                    edge_5_percent_time[edge_idx].push_back(time);
+                }
+                require_idx++;
+            }
+        }
+        // 以上5%分配完
+
+        calculate_each_edge_avg_dist_limit(avg_coefficient);
+        // 开始第二轮分配，第二轮分配是面向客户节点分配
+        // 对所有客户节点总需求量排序，以此选择时间点
+        std::vector<std::tuple<int, int, int, int>> sort_stream;
+
+        for (int i = 0; i < io.data_dm_rowstore.size(); i++) {
+            std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[i];
+            for (int cli_idx=0; cli_idx < row.size(); cli_idx++) {
+                for (int stream_idx=0; stream_idx < row[cli_idx].size(); stream_idx++) {
+                    sort_stream.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx, i});
+                }
+            }
+        }
+        // 从高到低排
+        std::sort(sort_stream.begin(), sort_stream.end(), 
+                    [](const std::tuple<int, int, int, int>& i,
+                    const std::tuple<int, int, int, int>& j) { return i > j; });
+
+        int pos_94 = 0.05 * res.size();
+        std::vector<std::vector<std::pair<int, int>>> edge_sort_score(
+            io.edges_names.size(), std::vector<std::pair<int, int>>(res.size()));
+
+        for (int time = 0; time < res.size(); time++) {
+            for (int edge_idx = 0; edge_idx < io.edges_names.size(); edge_idx++) {
+                int edge_dist = io.sb_map[io.edges_names[edge_idx]] -
+                                sb_map_alltime[time][io.edges_names[edge_idx]];
+                edge_sort_score[edge_idx][time] = {edge_dist, time};
+            }
+        }
+        double sum = 0;
+        for (int edge_idx = 0; edge_idx < io.edges_names.size(); edge_idx++) {
+            auto edge_score = edge_sort_score[edge_idx];
+            std::sort(edge_score.begin(), edge_score.end(), std::greater<std::pair<int, int>>());
+            edge_94_dist[edge_idx] = edge_score[pos_94].first;
+            
+        }
+        for (size_t st = 0; st < sort_stream.size(); st++) {
+            int time = std::get<3>(sort_stream[st]);
+            int cli_idx = std::get<2>(sort_stream[st]);
+            int stream_idx = std::get<1>(sort_stream[st]);
+            int stream = std::get<0>(sort_stream[st]);
+            // if(st < 100) std::cout << st << " " << stream << std::endl;
+            if(stream == 0) break;
+            int edge_choose = calculate_best_edge_with_edge_limit_with_choose_edge(time, cli_idx, stream);
+            if (edge_choose == -1) continue;
+            int& edge_rest_sb = sb_map_alltime[time][io.edges_names[edge_choose]];
+            auto& cli_stream = io.data_dm_rowstore[time][cli_idx][stream_idx];
+
+            // 添加结果
+            res[time][cli_idx][edge_choose].push_back(cli_stream);
+            // 分配值为客户端需求
+            int dist_v = cli_stream.first;
+            // 减去边缘节点剩余带宽
+            edge_rest_sb -= dist_v;
+            // 客户节点当前流的需求置0
+            cli_stream.first = cli_stream.first - dist_v;
+
+            int edge_dist_now = io.sb_map[io.edges_names[edge_choose]] - edge_rest_sb;
+            if(edge_dist_now > edge_94_dist[edge_choose]) {
+                bool is_in_5_percent = false;
+                for (auto time_5 : edge_5_percent_time[edge_choose]) {
+                    if(time == time_5) is_in_5_percent = true;
+                }
+                if(!is_in_5_percent) edge_94_dist[edge_choose] = edge_dist_now;
+            }
+            edge_94_dist[edge_choose] = std::max(edge_94_dist[edge_choose], edge_dist_now);
+            
+        }
+
+        sort_stream.clear();
+
+        for (int i = 0; i < io.data_dm_rowstore.size(); i++) {
+            std::vector<std::vector<std::pair<int, std::string>>>& row = io.data_dm_rowstore[i];
+            for (int cli_idx=0; cli_idx < row.size(); cli_idx++) {
+                for (int stream_idx=0; stream_idx < row[cli_idx].size(); stream_idx++) {
+                    sort_stream.push_back({row[cli_idx][stream_idx].first, stream_idx, cli_idx, i});
+                }
+            }
+        }
+        // 从高到低排
+        std::sort(sort_stream.begin(), sort_stream.end(), 
+                    [](const std::tuple<int, int, int, int>& i,
+                    const std::tuple<int, int, int, int>& j) { return i > j; });
+
+        for (size_t st = 0; st < sort_stream.size(); st++) {
+            int stream = std::get<0>(sort_stream[st]);
+            if(stream == 0) break;
+            int time = std::get<3>(sort_stream[st]);
+            int cli_idx = std::get<2>(sort_stream[st]);
+            int stream_idx = std::get<1>(sort_stream[st]);
+            
+            // // 对客户端节点能分配到的边缘节点，根据边缘节点的连通性排序
+            // std::vector<std::tuple<int, int, int>> sort_array;
+            // for (size_t i = 0; i < io.qos_map[cli_idx].size(); i++) {
+            //     sort_array.push_back({io.edge_dist_num[io.qos_map[cli_idx][i]],
+            //                             io.sb_map[io.edges_names[io.qos_map[cli_idx][i]]],
+            //                             io.qos_map[cli_idx][i]});
+            // }
+            // // 注意这里是从高到低排，跟之前不一样
+            // std::sort(sort_array.begin(), sort_array.end(),
+            //             [](const std::tuple<int, int, int>& i,
+            //                 const std::tuple<int, int, int>& j) { return i > j; });
+            // int edge_choose = -1;
+            // for(int i=0; i<sort_array.size(); i++) {
+            //     int edge = std::get<2>(sort_array[i]);
+            //     if(sb_map_alltime[time][io.edges_names[edge]] >= stream) {edge_choose = edge; break;}
+            // }
+            
+            int edge_choose = calculate_best_edge(time, cli_idx, stream);
+            // if(edge_choose == -1) continue;
+            
+            int& edge_rest_sb = sb_map_alltime[time][io.edges_names[edge_choose]];
+            auto& cli_stream = io.data_dm_rowstore[time][cli_idx][stream_idx];
+
+            // 添加结果
+            res[time][cli_idx][edge_choose].push_back(cli_stream);
+            // 分配值为客户端需求
+            int dist_v = cli_stream.first;
+            // 减去边缘节点剩余带宽
+            edge_rest_sb -= dist_v;
+            // 客户节点当前流的需求置0
+            cli_stream.first = cli_stream.first - dist_v;
+
+            int edge_dist_now = io.sb_map[io.edges_names[edge_choose]] - edge_rest_sb;
+            if(edge_dist_now > edge_94_dist[edge_choose]) {
+                bool is_in_5_percent = false;
+                for (auto time_5 : edge_5_percent_time[edge_choose]) {
+                    if(time == time_5) is_in_5_percent = true;
+                }
+                if(!is_in_5_percent) edge_94_dist[edge_choose] = edge_dist_now;
+            }
+            edge_94_dist[edge_choose] = std::max(edge_94_dist[edge_choose], edge_dist_now);
+            
+        }
+        return;
+    }
+
 
     int calculate_best_edge(int time, int cli_idx, int stream) {
         auto& sb_map_ref = sb_map_alltime[time];
         auto edges_relate = io.qos_map[cli_idx];
+        // std::vector<std::pair<int, int>> edge_dist_sort(edges_relate.size());
+        // for(int i=0; i<edges_relate.size(); i++) {
+        //     edge_dist_sort[i] = {io.edge_dist_num[edges_relate[i]], edges_relate[i]};
+        // }
+        // std::sort(edge_dist_sort.begin(), edge_dist_sort.end(), std::greater<std::pair<int, int>>());
         std::vector<std::tuple<int, int, int>> score_diff_sort; // score_diff / edge_dist_num / edge_id 
         for(int i=0; i < edges_relate.size(); i++) {
+            // int edge_idx = edge_dist_sort[i].second;
             int edge_idx = edges_relate[i];
             int score_diff = 0;
             int dist_max_before = edge_94_dist[edge_idx];
@@ -6923,7 +7586,8 @@ class ContestCalculate {
                                      if(std::get<0>(i) >= 0) return std::get<1>(i) > std::get<1>(j);
                                      else return std::get<1>(i) < std::get<1>(j);
                                  }
-                                 else return i < j; });
+                                 else 
+                                    return i < j; });
         return std::get<2>(score_diff_sort[0]);
     }
 
@@ -6981,9 +7645,216 @@ class ContestCalculate {
         else return std::get<2>(score_diff_sort[0]);
     }
 
+    int calculate_best_edge3(int time, int cli_idx, int stream) {
+        auto& sb_map_ref = sb_map_alltime[time];
+        auto edges_relate = io.qos_map[cli_idx];
+        std::vector<std::pair<int, int>> edge_dist_sort(edges_relate.size());
+        for(int i=0; i<edges_relate.size(); i++) {
+            edge_dist_sort[i] = {io.edge_dist_num[edges_relate[i]], edges_relate[i]};
+        }
+        std::sort(edge_dist_sort.begin(), edge_dist_sort.end(), std::greater<std::pair<int, int>>());
+        for(int i=0; i<edge_dist_sort.size(); i++) {
+            int edge_idx = edge_dist_sort[i].second;
+            if(!edge_choosed_and_sort_by_dist_num_first_round_bitmap[edge_idx]) continue;
+            if(io.base_cost - (io.sb_map[io.edges_names[edge_idx]] - sb_map_ref[io.edges_names[edge_idx]]) >= stream) return edge_idx;
+        }
+        for(int i=0; i<edge_dist_sort.size(); i++) {
+            int edge_idx = edge_dist_sort[i].second;
+            if(!edge_choosed_and_sort_by_dist_num_first_round_bitmap[edge_idx]) continue;
+            if(sb_map_ref[io.edges_names[edge_idx]] >= stream) return edge_idx;
+        }
+        return -1;
+        // return edge_dist_sort[0].second;
+        // std::vector<std::tuple<int, int, int>> score_diff_sort; // score_diff / edge_dist_num / edge_id 
+        // for(int i=0; i < edges_relate.size(); i++) {
+        //     // int edge_idx = edge_dist_sort[i].second;
+        //     int edge_idx = edges_relate[i];
+        //     int score_diff = 0;
+        //     int dist_max_before = edge_94_dist[edge_idx];
+        //     int dist_later =  io.sb_map[io.edges_names[edge_idx]] - sb_map_ref[io.edges_names[edge_idx]] + stream;
+        //     if (dist_later > io.sb_map[io.edges_names[edge_idx]]) continue;
+        //     int score_before = 0;
+        //     int score_later = 0;
+            
+        //     if (dist_max_before == 0) {
+        //         score_before += 0;
+        //     } else if (dist_max_before <= io.base_cost) {
+        //         score_before += io.base_cost;
+        //     } else {
+        //         int64_t over = dist_max_before - io.base_cost;
+        //         score_before += dist_max_before;
+        //         score_before += double(over * over) / io.sb_map[io.edges_names[edge_idx]];
+        //     }
+
+        //     bool is_in_5_percent = false;
+        //     for (auto time_5 : edge_5_percent_time[edge_idx]) {
+        //         if(time == time_5) is_in_5_percent = true;
+        //     }
+        //     if(is_in_5_percent) score_later = -1;
+        //     else if (dist_later == 0) {
+        //         score_later = 0;
+        //     } else if (dist_later <= io.base_cost) {
+        //         score_later = io.base_cost;
+        //     } else {
+        //         int64_t over = dist_later - io.base_cost;
+        //         score_later += dist_later;
+        //         score_later += double(over * over) / io.sb_map[io.edges_names[edge_idx]];
+        //     }
+        //     score_diff = score_later <= score_before ? 0 : score_later - score_before;
+        //     score_diff_sort.push_back({score_diff, io.edge_dist_num[edge_idx], edge_idx});
+        // }
+        // std::sort(score_diff_sort.begin(), score_diff_sort.end(),
+        //                   [](const std::tuple<int, int, int>& i,                    
+        //                      const std::tuple<int, int, int>& j) { 
+        //                          if(std::get<0>(i) == std::get<0>(j)) {
+        //                              if(std::get<0>(i) >= 0) return std::get<1>(i) > std::get<1>(j);
+        //                              else return std::get<1>(i) < std::get<1>(j);
+        //                          }
+        //                          else return i < j; });
+        // return std::get<2>(score_diff_sort[0]);
+    }
+
+
+    int calculate_best_edge_with_choose_edge(int time, int cli_idx, int stream) {
+        auto& sb_map_ref = sb_map_alltime[time];
+        auto edges_relate = io.qos_map[cli_idx];
+        // std::vector<std::pair<int, int>> edge_dist_sort(edges_relate.size());
+        // for(int i=0; i<edges_relate.size(); i++) {
+        //     edge_dist_sort[i] = {io.edge_dist_num[edges_relate[i]], edges_relate[i]};
+        // }
+        // std::sort(edge_dist_sort.begin(), edge_dist_sort.end(), std::greater<std::pair<int, int>>());
+        for(int i=0; i<edges_relate.size(); i++) {
+            int edge_idx = edges_relate[i];
+            if(!edge_choosed_and_sort_by_dist_num_first_round_bitmap[edge_idx]) continue;
+            if(io.base_cost - (io.sb_map[io.edges_names[edge_idx]] - sb_map_ref[io.edges_names[edge_idx]]) >= stream) return edge_idx;
+        }
+        std::vector<std::tuple<int, int, int>> score_diff_sort; // score_diff / edge_dist_num / edge_id 
+        int min_score_diff = INT32_MAX;
+        int max_dist_num = 0;
+        int choose_now = -1;
+        for(int i=0; i < edges_relate.size(); i++) {
+            // int edge_idx = edge_dist_sort[i].second;
+            int edge_idx = edges_relate[i];
+            if(!edge_choosed_and_sort_by_dist_num_bitmap[edge_idx] || !edge_choosed_and_sort_by_dist_num_first_round_bitmap[edge_idx]) continue;
+            int score_diff = 0;
+            int dist_max_before = edge_94_dist[edge_idx];
+            int dist_later =  io.sb_map[io.edges_names[edge_idx]] - sb_map_ref[io.edges_names[edge_idx]] + stream;
+            if (dist_later > io.sb_map[io.edges_names[edge_idx]]) continue;
+            int score_before = 0;
+            int score_later = 0;
+            
+            if (dist_max_before == 0) {
+                score_before += 0;
+            } else if (dist_max_before <= io.base_cost) {
+                score_before += io.base_cost;
+            } else {
+                int64_t over = dist_max_before - io.base_cost;
+                score_before += dist_max_before;
+                score_before += double(over * over) / io.sb_map[io.edges_names[edge_idx]];
+            }
+
+            bool is_in_5_percent = false;
+            for (auto time_5 : edge_5_percent_time[edge_idx]) {
+                if(time == time_5) is_in_5_percent = true;
+            }
+            if(is_in_5_percent) score_later = -1;
+            else if (dist_later == 0) {
+                score_later = 0;
+            } else if (dist_later <= io.base_cost) {
+                score_later = io.base_cost;
+            } else {
+                int64_t over = dist_later - io.base_cost;
+                score_later += dist_later;
+                score_later += double(over * over) / io.sb_map[io.edges_names[edge_idx]];
+            }
+            if(score_later == -1) score_diff = -1;
+            else score_diff = score_later <= score_before ? 0 : score_later - score_before;
+            if(score_diff < min_score_diff) {
+                min_score_diff = score_diff;
+                max_dist_num = io.edge_dist_num[edge_idx];
+                choose_now = edge_idx;
+            } else if(score_diff == min_score_diff) {
+                if(io.edge_dist_num[edge_idx] > max_dist_num) {
+                    max_dist_num = io.edge_dist_num[edge_idx];
+                    choose_now = edge_idx;
+                }
+            }
+            // score_diff_sort.push_back({score_diff, io.edge_dist_num[edge_idx], edge_idx});
+            // score_diff_sort.push_back({score_diff, io.sb_map[io.edges_names[edge_idx]] - sb_map_ref[io.edges_names[edge_idx]], edge_idx});
+        }
+        // std::sort(score_diff_sort.begin(), score_diff_sort.end(),
+        //                   [](const std::tuple<int, int, int>& i,                    
+        //                      const std::tuple<int, int, int>& j) { 
+        //                          if(std::get<0>(i) == std::get<0>(j)) {
+        //                              return std::get<1>(i) > std::get<1>(j);
+        //                          }
+        //                          else return i < j; });
+        // if (score_diff_sort.size() == 0) return -1;
+        // else return std::get<2>(score_diff_sort[0]);
+        return choose_now;
+    }
+
+
+    int calculate_best_edge_with_edge_limit_with_choose_edge(int time, int cli_idx, int stream) {
+        auto& sb_map_ref = sb_map_alltime[time];
+        auto edges_relate = io.qos_map[cli_idx];
+        std::vector<std::tuple<int, int, int>> score_diff_sort; // score_diff / edge_dist_num / edge_id 
+        
+        for(int i=0; i < edges_relate.size(); i++) {
+            int edge_idx = edges_relate[i];
+            if(!edge_choosed_and_sort_by_dist_num_bitmap[edge_idx]) continue;
+            int score_diff = 0;
+            int dist_max_before = edge_94_dist[edge_idx];
+            int dist_later =  io.sb_map[io.edges_names[edge_idx]] - sb_map_ref[io.edges_names[edge_idx]] + stream;
+            if (dist_later > io.sb_map[io.edges_names[edge_idx]] || dist_later > edges_avg_limit[edge_idx]) continue;
+            int score_before = 0;
+            int score_later = 0;
+
+            
+            if (dist_max_before == 0) {
+                score_before += 0;
+            } else if (dist_max_before <= io.base_cost) {
+                score_before += io.base_cost;
+            } else {
+                int64_t over = dist_max_before - io.base_cost;
+                score_before += dist_max_before;
+                score_before += double(over * over) / io.sb_map[io.edges_names[edge_idx]];
+            }
+
+            bool is_in_5_percent = false;
+            for (auto time_5 : edge_5_percent_time[edge_idx]) {
+                if(time == time_5) is_in_5_percent = true;
+            }
+            if(is_in_5_percent) score_later = -1;
+            else if (dist_later == 0) {
+                score_later = 0;
+            } else if (dist_later <= io.base_cost) {
+                score_later = io.base_cost;
+            } else {
+                int64_t over = dist_later - io.base_cost;
+                score_later += dist_later;
+                score_later += double(over * over) / io.sb_map[io.edges_names[edge_idx]];
+            }
+            score_diff = score_later <= score_before ? 0 : score_later - score_before;
+            score_diff_sort.push_back({score_diff, io.edge_dist_num[edge_idx], edge_idx});
+        }
+        std::sort(score_diff_sort.begin(), score_diff_sort.end(),
+                          [](const std::tuple<int, int, int>& i,                    
+                             const std::tuple<int, int, int>& j) { 
+                                //  if(std::get<0>(i) == std::get<0>(j)) {
+                                //      if(std::get<0>(i) >= 0) return std::get<1>(i) > std::get<1>(j);
+                                //      else return std::get<1>(i) < std::get<1>(j);
+                                //  }
+                                //  else 
+                                 return i < j; });
+        if (score_diff_sort.size() == 0) return -1;
+        else return std::get<2>(score_diff_sort[0]);
+    }
+
+
     // 对计算得到的res进行重分配优化，有bug还调不出来，没什么用
     void res_redist() {
-        int pos_94 = 0.05 * res.size() - 1;
+        int pos_94 = 0.05 * res.size();
         std::vector<int> edge_score_94(io.edges_names.size());
         std::vector<std::vector<std::pair<int, int>>> edge_sort_score(
             io.edges_names.size(), std::vector<std::pair<int, int>>(res.size()));
@@ -7022,16 +7893,16 @@ class ContestCalculate {
         std::sort(sort_edge_dist_num.begin(), sort_edge_dist_num.end());  // 从小到大排列
 
         // int runtime = 100;
-        int small_run_time = 10000;
+        int small_run_time = 1000;
         while (true) {
             bool hit = false;
             for (int k = 0; k < io.edges_names.size(); k++) {
                 int edge_idx = sort_edge_dist_num[k].second;
-                if (edge_score_94[edge_idx] == 0) continue;
                 auto edge_score = edge_sort_score_time_order[edge_idx];
                 std::sort(edge_score.begin(), edge_score.end(),
                           std::greater<std::pair<int, int>>());
                 edge_score_94[edge_idx] = edge_score[pos_94].first;
+                if (edge_score_94[edge_idx] <= io.base_cost) continue;
                 std::set<int> envovled_clis;
                 std::set<int> envovled_edges;
                 for (int i = 0; i < io.edge_dist_clients[edge_idx].size(); i++) {
@@ -7046,7 +7917,9 @@ class ContestCalculate {
                 while (true) {
                     int time_in = edge_score[sort_idx].second;
                     for (auto edge_other : envovled_edges) {
+                        if(edge_other == edge_idx) continue;
                         if (edge_score_94[edge_other] == 0) continue;
+                        bool get = false;
                         std::set<int> clis_other;
                         std::set<int> avaliable_clis;
                         for (int i = 0; i < io.edge_dist_clients[edge_other].size(); i++) {
@@ -7061,7 +7934,7 @@ class ContestCalculate {
                             if (res[time_in][cli_idx][edge_idx].size() == 0) continue;
                             int diff_to_94 = edge_score_94[edge_other] -
                                              edge_sort_score_time_order[edge_other][time_in].first;
-                            if (diff_to_94 == 0) continue;
+                            // if (diff_to_94 == 0) continue;
                             auto traverse = res[time_in][cli_idx][edge_idx].begin();
                             // std::sort(res[time_in][cli_idx][edge_idx].begin(),
                             // res[time_in][cli_idx][edge_idx].end());
@@ -7084,12 +7957,17 @@ class ContestCalculate {
                                         edge_sort_score_time_order[edge_idx][time_in].first =
                                             edge_sort_score_time_order[edge_idx][time_in].first -
                                             dist_v;
+                                        sb_map_alltime[time_in][io.edges_names[edge_idx]] += dist_v;
+                                        sb_map_alltime[time_in][io.edges_names[edge_other]] -= dist_v;
                                         diff_to_94 -= dist_v;
                                         small_run_time--;
                                         if (small_run_time == 0) return;
+                                        get = true;
+                                        break;
                                         // std::cout << small_run_time << std::endl;
                                     } else {
                                         traverse++;
+                                        continue;
                                         // break;
                                     }
                                 } else if (diff_to_94 < 0) {
@@ -7114,32 +7992,81 @@ class ContestCalculate {
                                         edge_sort_score_time_order[edge_idx][time_in].first =
                                             edge_sort_score_time_order[edge_idx][time_in].first -
                                             dist_v;
+                                        sb_map_alltime[time_in][io.edges_names[edge_idx]] += dist_v;
+                                        sb_map_alltime[time_in][io.edges_names[edge_other]] -= dist_v;
                                         diff_to_94 -= dist_v;
                                         small_run_time--;
                                         if (small_run_time == 0) return;
+                                        get = true;
+                                        
+                                        break;
                                         // std::cout << small_run_time << std::endl;
                                     } else {
                                         traverse++;
+                                        continue;
                                         // break;
                                     }
                                 } else {
                                     // traverse++;
+                                    // int dist_v = (*traverse).first;
+                                    // int diff_other = calculate_score_diff(edge_other, edge_score_94[edge_other], edge_score_94[edge_other] + dist_v);
+                                    // int diff_this = calculate_score_diff(edge_other, edge_score_94[edge_idx] - dist_v, edge_score_94[edge_other]);
+                                    // if(diff_other < diff_this){
+                                    //     res[time_in][cli_idx][edge_other].push_back(
+                                    //         {(*traverse).first, (*traverse).second});
+                                    //     traverse = res[time_in][cli_idx][edge_idx].erase(traverse);
+                                    //     edge_sort_score_time_order[edge_other][time_in].first =
+                                    //         edge_sort_score_time_order[edge_other][time_in].first +
+                                    //         dist_v;
+                                    //     edge_sort_score_time_order[edge_idx][time_in].first =
+                                    //         edge_sort_score_time_order[edge_idx][time_in].first -
+                                    //         dist_v;
+                                    //     sb_map_alltime[time_in][io.edges_names[edge_idx]] += dist_v;
+                                    //     sb_map_alltime[time_in][io.edges_names[edge_other]] -= dist_v;
+                                    //     diff_to_94 -= dist_v;
+                                    //     break;
+                                    // } else {
+                                    //     traverse++;
+                                    //     continue;
+                                    // }
                                     break;
                                 }
                             }
+                            if(get) break;
                         }
+                        if(get) break;
                     }
-                    if (sort_idx == res.size() - 1 || sort_idx - pos_94 >= 10) {
-                        break;
-                    } else {
+                    // if (sort_idx == res.size() - 1 || sort_idx - pos_94 >= 10) {
+                    //     break;
+                    // } else {
+                    //     if (edge_sort_score_time_order[edge_idx][time_in].first <
+                    //         edge_sort_score_time_order[edge_idx][edge_score[sort_idx + 1].second]
+                    //             .first) {
+                    //         edge_score_94[edge_idx] =
+                    //             edge_sort_score_time_order[edge_idx]
+                    //                                       [edge_score[sort_idx + 1].second]
+                    //                                           .first;
+                    //         sort_idx++;
+                    //         hit = true;
+                    //     } else {
+                    //         if (edge_sort_score_time_order[edge_idx][time_in].first <
+                    //             edge_score_94[edge_idx])
+                    //             hit = true;
+                    //         edge_score_94[edge_idx] =
+                    //             edge_sort_score_time_order[edge_idx][time_in].first;
+                    //         break;
+                    //     }
+                    // }
+                    if (sort_idx == res.size() - 1) break;
+                    else {
                         if (edge_sort_score_time_order[edge_idx][time_in].first <
                             edge_sort_score_time_order[edge_idx][edge_score[sort_idx + 1].second]
                                 .first) {
-                            sort_idx++;
                             edge_score_94[edge_idx] =
                                 edge_sort_score_time_order[edge_idx]
-                                                          [edge_score[sort_idx + 1].second]
-                                                              .first;
+                                                            [edge_score[sort_idx + 1].second]
+                                                                .first;
+                            sort_idx++;
                             hit = true;
                         } else {
                             if (edge_sort_score_time_order[edge_idx][time_in].first <
@@ -7150,6 +8077,8 @@ class ContestCalculate {
                             break;
                         }
                     }
+                    // break;
+                    
                 }
                 edge_score = edge_sort_score_time_order[edge_idx];
                 std::sort(edge_score.begin(), edge_score.end(),
@@ -7161,6 +8090,33 @@ class ContestCalculate {
             if (!hit) break;
         }
         // std::cout << "RUNTIME:" << runtime << std::endl;
+    }
+
+    int calculate_score_diff(int edge_idx, int dist_max_before, int dist_max_later) {
+        int score_before = 0;
+        int score_later = 0;
+
+        
+        if (dist_max_before == 0) {
+            score_before += 0;
+        } else if (dist_max_before <= io.base_cost) {
+            score_before += io.base_cost;
+        } else {
+            int64_t over = dist_max_before - io.base_cost;
+            score_before += dist_max_before;
+            score_before += double(over * over) / io.sb_map[io.edges_names[edge_idx]];
+        }
+
+        if (dist_max_later == 0) {
+            score_later = 0;
+        } else if (dist_max_later <= io.base_cost) {
+            score_later = io.base_cost;
+        } else {
+            int64_t over = dist_max_later - io.base_cost;
+            score_later += dist_max_later;
+            score_later += double(over * over) / io.sb_map[io.edges_names[edge_idx]];
+        }
+        return score_later - score_before;
     }
 
     /* 计分函数 */
@@ -7320,4 +8276,8 @@ class ContestCalculate {
     std::vector<int64_t> edges_avg_limit;
     std::vector<int> edge_94_dist;
     std::vector<std::vector<int>> edge_5_percent_time;
+    std::vector<bool> edge_choosed_and_sort_by_dist_num_bitmap;
+    std::vector<int> edge_choosed_and_sort_by_dist_num;
+    std::vector<bool> edge_choosed_and_sort_by_dist_num_first_round_bitmap;
+    std::vector<int> edge_choosed_and_sort_by_dist_first_round_num;
 };

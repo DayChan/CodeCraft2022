@@ -7,23 +7,35 @@ int main() {
     // 处理输入
     ContestIO io;
     io.handle_contest_input();
-    std::vector<double> costs = {1.0};
+    // std::vector<double> costs = {0.8, 1.0, 1.2};
     // std::vector<double> costs = {175 * io.base_cost, 180 * io.base_cost, 200 * io.base_cost, 225 * io.base_cost};
     // std::vector<double> costs = {0.8 * io.base_cost, 1.0 * io.base_cost, 2.0 * io.base_cost, 3.0 * io.base_cost, 4.0 * io.base_cost};
-    // std::vector<double> costs = {1.0};
+    std::vector<double> costs = {0.84};
+    // std::vector<double> costs = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0};
+    // std::vector<double> costs = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0};
+    // std::vector<double> costs = {0.92};
     int min_score = INT32_MAX;
     std::vector<std::vector<std::vector<std::vector<std::pair<int, std::string>>>>> min_res;
     for(auto cost : costs) {
         ContestCalculate* cal = new ContestCalculate(io);
 
-        // cal->brute_force5();
-        cal->brute_force5_with_edge_limit(cost);
+        // cal->brute_force6();
+        // cal->brute_force5_with_edge_limit(cost);
         // cal->brute_force3_with_coeffiicient_avg_dist(cost);
         // cal->brute_force3_with_coeffiicient_avg_dist_with_calculate_first_score(cost);
         // cal->brute_force3_with_basecost_dist();
-        int score = cal->calculate_94_score();
+        // cal->brute_force5();
+        cal->brute_force7(cost, 0.5);
+        int score = 0;
         #ifdef DEBUG
-        std::cout << "COST:" << cost << " SCORE: " << score << std::endl;
+        score = cal->calculate_94_score();
+        std::cout << "BEFORE COST:" << cost << " SCORE: " << score << std::endl;
+        #endif
+        cal->res_redist();
+        // cal->brute_force7_with_edge_limit(0.9, cost);
+        score = cal->calculate_94_score();
+        #ifdef DEBUG
+        std::cout << "AFTER REDIST COST:" << cost << " SCORE: " << score << std::endl;
         #endif
         if(score < min_score) {
             min_score = score;
