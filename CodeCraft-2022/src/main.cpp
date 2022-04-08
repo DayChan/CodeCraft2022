@@ -1,4 +1,4 @@
-// #define DEBUG
+#define DEBUG
 // 提交时记得注释掉这个宏
 #include "ContestIO.h"
 #include "Calculate.h"
@@ -10,7 +10,7 @@ int main() {
     // std::vector<double> costs = {0.8, 1.0, 1.2};
     // std::vector<double> costs = {175 * io.base_cost, 180 * io.base_cost, 200 * io.base_cost, 225 * io.base_cost};
     // std::vector<double> costs = {0.8 * io.base_cost, 1.0 * io.base_cost, 2.0 * io.base_cost, 3.0 * io.base_cost, 4.0 * io.base_cost};
-    std::vector<double> costs = {0.84};
+    std::vector<double> costs = {0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87, 0.88, 0.89};
     // std::vector<double> costs = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0};
     // std::vector<double> costs = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0};
     // std::vector<double> costs = {0.92};
@@ -25,29 +25,36 @@ int main() {
         // cal->brute_force3_with_coeffiicient_avg_dist_with_calculate_first_score(cost);
         // cal->brute_force3_with_basecost_dist();
         // cal->brute_force5();
-        cal->brute_force7(cost, 0.5);
+        int status = cal->brute_force9(cost, 0.4);
         int score = 0;
-        #ifdef DEBUG
-        score = cal->calculate_94_score();
-        std::cout << "BEFORE COST:" << cost << " SCORE: " << score << std::endl;
-        #endif
-        cal->res_redist();
-        // cal->brute_force7_with_edge_limit(0.9, cost);
-        score = cal->calculate_94_score();
-        #ifdef DEBUG
-        std::cout << "AFTER REDIST COST:" << cost << " SCORE: " << score << std::endl;
-        #endif
-        if(score < min_score) {
+        if(status == -1) {
+            score = -1;
+            std::cout << "ERROR COST:" << cost << " SCORE: " << score << std::endl;
+        }
+        else {
+            #ifdef DEBUG
+            if(status == 0)
+            score = cal->calculate_94_score();
+            std::cout << "BEFORE COST:" << cost << " SCORE: " << score << std::endl;
+            #endif
+            cal->res_redist();
+            // cal->brute_force7_with_edge_limit(0.9, cost);
+            score = cal->calculate_94_score();
+            #ifdef DEBUG
+            std::cout << "AFTER REDIST COST:" << cost << " SCORE: " << score << std::endl;
+            #endif
+        }
+        
+        if(score >= 0 && score < min_score) {
             min_score = score;
             min_res = cal->res;
         }
         delete cal;
     }
     
-    io.handle_output(min_res);
+    if (min_score != INT32_MAX) io.handle_output(min_res);
     // cal.average_distribute();
     // cal.res_redist();
     // cal.handle_output();
-    
     
 }

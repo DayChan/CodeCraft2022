@@ -201,6 +201,22 @@ class ContestIO {
         return;
     }
 
+    void output_demand() {
+        std::ofstream fout("./output/cli_demand.txt", std::ios_base::trunc);
+        for(int time=0; time < data_dm_rowstore.size(); time++) {
+            auto& row = data_dm_rowstore[time];
+            for(int cli_idx=0; cli_idx < row.size(); cli_idx++) {
+                int cli_dm = 0;
+                for(auto& stream : row[cli_idx]) {
+                    cli_dm += stream.first;
+                }
+                fout << cli_dm << " ";
+            }
+            fout << std::endl;
+        }
+        fout.close();
+    }
+
     public:
         int qos_constrain;
         int base_cost;
