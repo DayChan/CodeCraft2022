@@ -24,3 +24,5 @@ aux_source_directory(. DIR_SRCS)
 
 # 指定生成目标
 add_executable(CodeCraft-2022 ${DIR_SRCS})
+
+target_link_libraries(CodeCraft-2022 pthread)
