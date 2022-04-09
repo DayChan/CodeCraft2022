@@ -7829,11 +7829,11 @@ class ContestCalculate {
     // 先分配base_cost再分配5%
     int brute_force9(double edge_choose_rate_first, double edge_choose_rate_second) {
         // this->calculate_each_edge_avg_upper_bound(avg_cost);
-        for(int i=0; i<io.qos_map[1].size(); i++) std::cout << "EDGE_IDX:" << io.qos_map[1][i] << "DIST_NUM:" << io.edge_dist_num[io.qos_map[1][i]] <<" ";
-        std::cout << std::endl;
+        // for(int i=0; i<io.qos_map[1].size(); i++) std::cout << "EDGE_IDX:" << io.qos_map[1][i] << "DIST_NUM:" << io.edge_dist_num[io.qos_map[1][i]] <<" ";
+        // std::cout << std::endl;
 
-        for(int i=0; i<io.qos_map[5].size(); i++) std::cout << "EDGE_IDX:" << io.qos_map[5][i] << "DIST_NUM:" << io.edge_dist_num[io.qos_map[5][i]] <<" ";
-        std::cout << std::endl;
+        // for(int i=0; i<io.qos_map[5].size(); i++) std::cout << "EDGE_IDX:" << io.qos_map[5][i] << "DIST_NUM:" << io.edge_dist_num[io.qos_map[5][i]] <<" ";
+        // std::cout << std::endl;
         int edge_choose_num_first = io.edges_names.size() * edge_choose_rate_first;
         int edge_choose_num = io.edges_names.size() * edge_choose_rate_second;
         edge_choosed_and_sort_by_dist_num_first_round_bitmap.resize(io.edges_names.size(), false);
@@ -8075,8 +8075,9 @@ class ContestCalculate {
             }
         }
         // 以上5%分配完
+        #ifdef DEBUG
         io.output_demand();
-
+        #endif
         // 开始第二轮分配，第二轮分配是面向客户节点分配
         // 对所有客户节点总需求量排序，以此选择时间点
         std::vector<std::tuple<int, int, int, int>> sort_stream;
@@ -8193,8 +8194,9 @@ class ContestCalculate {
             edge_94_dist[edge_choose] = std::max(edge_94_dist[edge_choose], edge_dist_now);
             
         }
-
+        #ifdef DEBUG
         output_edge_dist();
+        #endif
         return 0;
     }
 
@@ -9979,8 +9981,8 @@ class ContestCalculate {
     }
 
 
-    // 对计算得到的res进行重分配优化，有bug还调不出来，没什么用
-    void res_redist3() {
+    // 填补自己节点的剩余空间
+    void res_redist3(int runtime) {
         int pos_94 = 0.05 * res.size();
         std::vector<int> edge_score_94(io.edges_names.size());
         std::vector<std::vector<std::pair<int, int>>> edge_sort_score(
@@ -10019,7 +10021,7 @@ class ContestCalculate {
         }
         std::sort(sort_edge_dist_num.begin(), sort_edge_dist_num.end());  // 从小到大排列
 
-        int runtime = 1;
+        // int runtime = 3;
         // int small_run_time = 10000;
         while (true) {
             bool hit = false;
@@ -10053,7 +10055,7 @@ class ContestCalculate {
                         if(edge_other == edge_idx) continue;
                         if (edge_score_94[edge_other] <= io.base_cost) continue;
                         if (edge_sort_score_time_order[edge_other][time_in].first > edge_score_94[edge_other]) continue;
-                        bool get = false;
+                        // bool get = false;
                         std::set<int> clis_other;
                         std::set<int> avaliable_clis;
                         for (int i = 0; i < io.edge_dist_clients[edge_other].size(); i++) {
@@ -10100,6 +10102,7 @@ class ContestCalculate {
                                         // get = true;
                                         // break;
                                         // std::cout << small_run_time << std::endl;
+                                        hit =true;
                                     } else {
                                         traverse++;
                                         continue;
@@ -10149,14 +10152,14 @@ class ContestCalculate {
             }
             runtime--;
             if (!runtime) break;
-            // if (!hit) break;
+            if (!hit) break;
         }
         // std::cout << "RUNTIME:" << runtime << std::endl;
     }
 
 
-    // 尝试计算成本降低
-    void res_redist4() {
+    // 将成本转移到其他节点的剩余空间，如果总成本能降，可以适当提升其他节点的成本
+    void res_redist4(int runtime) {
         int pos_94 = 0.05 * res.size();
         std::vector<int> edge_score_94(io.edges_names.size());
         std::vector<std::vector<std::pair<int, int>>> edge_sort_score(
@@ -10181,7 +10184,7 @@ class ContestCalculate {
         }
         std::sort(sort_edge_dist_num.begin(), sort_edge_dist_num.end());  // 从小到大排列
 
-        int runtime = 10;
+        // int runtime = 10;
         // int small_run_time = 100000;
         while (true) {
             bool hit = false;
@@ -10423,6 +10426,106 @@ class ContestCalculate {
         // std::cout << "RUNTIME:" << runtime << std::endl;
     }
 
+    // 对成本大的边缘节点，尝试整体迁移到另一个节点上
+    // 没有用，很难控制这个度，容易导致成本上升
+    void res_redist5() {
+        int pos_94 = 0.05 * res.size();
+        std::vector<int> edge_score_94(io.edges_names.size());
+        std::vector<std::vector<std::pair<int, int>>> edge_sort_score(
+            io.edges_names.size(), std::vector<std::pair<int, int>>(res.size()));
+        for (int time = 0; time < res.size(); time++) {
+            for (int edge_idx = 0; edge_idx < io.edges_names.size(); edge_idx++) {
+                int edge_dist = io.sb_map[io.edges_names[edge_idx]] -
+                                sb_map_alltime[time][io.edges_names[edge_idx]];
+                edge_sort_score[edge_idx][time] = {edge_dist, time};
+            }
+        }
+        auto edge_sort_score_time_order = edge_sort_score;
+        for (int edge_idx = 0; edge_idx < io.edges_names.size(); edge_idx++) {
+            auto edge_score = edge_sort_score_time_order[edge_idx];
+            std::sort(edge_score.begin(), edge_score.end(), std::greater<std::pair<int, int>>());
+            edge_score_94[edge_idx] = edge_score[pos_94].first;
+        }
+
+        std::vector<std::pair<int, int>> sort_edge_94_score;
+        for (size_t i = 0; i < io.edges_names.size(); i++) {
+            sort_edge_94_score.push_back({edge_score_94[i], i});
+        }
+        std::sort(sort_edge_94_score.begin(), sort_edge_94_score.end(), std::greater<std::pair<int, int>>());  // 从小到大排列
+        
+        for(int i=0; i < io.edges_names.size(); i++) {
+            int edge_idx = sort_edge_94_score[i].second;
+            std::vector<int> edge_occur_time(io.edges_names.size(), 0);
+            for(int j=0; j < io.edge_dist_clients[edge_idx].size(); j++) {
+                for(int k=0; k < io.qos_map[io.edge_dist_clients[edge_idx][j]].size(); k++) {
+                    edge_occur_time[io.qos_map[io.edge_dist_clients[edge_idx][j]][k]]++;
+                }
+            }
+            int max_edge_num = 0;
+            int min_edge_94 = INT32_MAX;
+            int max_edge = -1;
+            for(int j=0; j < io.edges_names.size(); j++) {
+                if(j == edge_idx) continue;
+                if(edge_score_94[j] == 0) continue;
+                if(edge_occur_time[j] > max_edge_num) {
+                    max_edge_num = edge_occur_time[j];
+                    min_edge_94 = edge_score_94[j];
+                    max_edge = j;
+                } else if(edge_occur_time[j] == max_edge_num) {
+                    if(edge_score_94[j] < min_edge_94) {
+                        min_edge_94 = edge_score_94[j];
+                        max_edge = j;
+                    }
+                }
+            }
+            int max_dist_value = (edge_score_94[edge_idx] - edge_score_94[max_edge]) / 2;
+            if(max_dist_value <= 0) continue;
+
+            std::vector<int> avaliable_clis;
+            std::set_intersection(
+                            io.edge_dist_clients[edge_idx].begin(), io.edge_dist_clients[edge_idx].end(), io.edge_dist_clients[max_edge].begin(),
+                            io.edge_dist_clients[max_edge].end(),
+                            std::inserter(avaliable_clis, avaliable_clis.begin()));
+            auto edge_score = edge_sort_score_time_order[edge_idx];
+            std::sort(edge_score.begin(), edge_score.end(), std::greater<std::pair<int, int>>());
+            int min_past_dist = INT32_MAX;
+            int max_past_dist = 0;
+            for(int sort_idx=pos_94; sort_idx<edge_score.size(); sort_idx++) {
+                int time = edge_score[sort_idx].second;
+                int dist_acc = 0;
+                for (auto cli_idx : avaliable_clis) {
+                    std::sort(res[time][cli_idx][edge_idx].begin(), res[time][cli_idx][edge_idx].end());
+                    auto traverse = res[time][cli_idx][edge_idx].begin();
+                    while (traverse != res[time][cli_idx][edge_idx].end()) {
+                        int dist_v = traverse->first;
+                        if(dist_acc + dist_v <= min_past_dist && dist_acc + dist_v <= max_dist_value) {
+                            res[time][cli_idx][max_edge].push_back(
+                                *traverse);
+                            traverse = res[time][cli_idx][edge_idx].erase(traverse);
+                            edge_sort_score_time_order[max_edge][time].first =
+                                edge_sort_score_time_order[max_edge][time].first +
+                                dist_v;
+                            edge_sort_score_time_order[edge_idx][time].first =
+                                edge_sort_score_time_order[edge_idx][time].first -
+                                dist_v;
+                            sb_map_alltime[time][io.edges_names[max_edge]] -= dist_v;
+                            sb_map_alltime[time][io.edges_names[edge_idx]] += dist_v;
+                            dist_acc += dist_v;
+                        } else break;
+                    }
+                }
+                min_past_dist = std::min(min_past_dist, dist_acc);
+                max_past_dist = std::max(max_past_dist, dist_acc);
+            }
+            std::cout << "MINMAX: " << min_past_dist << " " << max_past_dist << std::endl;
+            edge_score = edge_sort_score_time_order[edge_idx];
+            std::sort(edge_score.begin(), edge_score.end(), std::greater<std::pair<int, int>>());
+            edge_score_94[edge_idx] = edge_score[pos_94].first;
+            auto edge_score_other = edge_sort_score_time_order[max_edge];
+            std::sort(edge_score_other.begin(), edge_score_other.end(), std::greater<std::pair<int, int>>());
+            edge_score_94[max_edge] = edge_score_other[pos_94].first;
+        }
+    }
 
     int calculate_score_diff(int edge_idx, int dist_max_before, int dist_max_later) {
         int score_before = 0;
