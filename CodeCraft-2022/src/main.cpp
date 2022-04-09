@@ -14,7 +14,7 @@ int main() {
     // std::vector<double> costs = {175 * io.base_cost, 180 * io.base_cost, 200 * io.base_cost, 225 * io.base_cost};
     // std::vector<double> costs = {0.8 * io.base_cost, 1.0 * io.base_cost, 2.0 * io.base_cost, 3.0 * io.base_cost, 4.0 * io.base_cost};
     // std::vector<double> costs = {0.81, 0.82, 0.83, 0.84, 0.85, 0.86, 0.87, 0.88, 0.89};
-    std::vector<double> costs = {0.65, 0.66, 0.67, 0.68, 0.69, 0.7};
+    std::vector<double> costs = {0.05, 0.1, 0.15, 0.2};
     // std::vector<double> costs = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0};
     // std::vector<double> costs = {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0};
     // std::vector<double> costs = {0.92};
@@ -31,7 +31,8 @@ int main() {
         // cal->brute_force5();
         // int status = cal->brute_force10(cost, 0.5);
         // int status = cal->brute_force11(cost, 0.5, 0.3, 0.00, 2);
-        int status = cal->brute_force9(cost, 0.5);
+        // int status = cal->brute_force9(cost, 0.5);
+        int status = cal->brute_force12(cost, 0.5, 0.2, 0.05, 4);
         int score = 0;
         if(status == -1) {
             score = -1;

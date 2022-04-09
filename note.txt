@@ -1,3 +1,6 @@
-明天先尝试调参brute_force9 和 调参redist次数
 明天可能会修改输入，先把输入改好，找到原来算法中需要修改的地方
-然后再尝试调参brute_force11
+先尝试调参brute_force9 和 调参redist次数,如果超时了立马换第二轮分配的排序
+然后再尝试调参brute_force12
+最后尝试调参brute_force11
+
+注意调整5%分配的排序方式
