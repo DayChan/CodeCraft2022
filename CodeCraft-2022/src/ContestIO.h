@@ -177,6 +177,17 @@ class ContestIO {
     #else
         std::ofstream fout("/output/solution.txt", std::ios_base::trunc);
     #endif
+        #ifndef DEBUG
+        bool is_first = true;
+        for(int edge_idx=0; edge_idx < edges_names.size(); edge_idx++) {
+            if(choose_90_edge_bitmap[edge_idx]) {
+                if(!is_first) fout << ",";
+                else is_first = false;
+                fout << edges_names[edge_idx];
+            }
+        }
+        fout << std::endl;
+        #endif
         for (size_t time = 0; time < res.size(); time++) {
             auto& output_time = res[time];
             for (size_t cli_idx = 0; cli_idx < output_time.size(); cli_idx++) {
@@ -200,6 +211,14 @@ class ContestIO {
         fout.close();
         return;
     }
+
+    // void choose_90_edge() {
+    //     for(int i=0; )
+    // }
+
+    // void set_90_edge() {
+
+    // }
 
     void output_demand() {
         std::ofstream fout("./output/cli_demand.txt", std::ios_base::trunc);
@@ -228,5 +247,6 @@ class ContestIO {
             qos_map;  // 根据qos_constrain过滤后客户节点可用的edges，vector序号对应着client_names里面的顺序，edges序号对应着edges_names里面的序号
         std::vector<int> edge_dist_num;                   // 每个edge可以分发的节点数
         std::vector<std::vector<int>> edge_dist_clients;  // 每个edge可以分发的客户节点
-        std::unordered_map<std::string, int> sb_map;      // 带宽映射，根据edge name获得带宽        
+        std::unordered_map<std::string, int> sb_map;      // 带宽映射，根据edge name获得带宽     
+        std::vector<bool> choose_90_edge_bitmap;               // 
 };
